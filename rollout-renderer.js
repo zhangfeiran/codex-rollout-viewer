@@ -1518,7 +1518,7 @@ function renderSidebarGroup(group, callById) {
     .map(section => renderSidebarAssistantSection(section, callById))
     .join("");
   return `
-    <details open data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
+    <details data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
       <summary><span class="rollout-nav-label">${escapeHtml(label)}</span></summary>
       <div class="rollout-tree-children">
         <a href="#${escapeAttribute(group.id)}">${escapeHtml(label)}</a>
@@ -1779,7 +1779,7 @@ function renderTurnGroup(group, context) {
     counts.failed ? `${formatNumber(counts.failed)} failed` : ""
   ].filter(Boolean);
   return `
-    <details class="rollout-turn" id="${escapeAttribute(group.id)}" open data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}">
+    <details class="rollout-turn" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}">
       <summary>
         <div class="rollout-turn-title">
           <h2>${escapeHtml(group.isPreamble ? title : `${group.index}. ${title}`)}</h2>
