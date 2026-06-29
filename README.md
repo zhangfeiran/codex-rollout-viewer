@@ -6,7 +6,7 @@ A standalone Chrome extension for rendering local Codex rollout `.jsonl` files.
 
 Open `standalone.html` in Chrome. Use `Open .codex/sessions` to grant access to the sessions directory, or drop rollout `.jsonl` files onto the page.
 
-The standalone viewer lists indexed rollouts in a sortable table, defaulting to last modified time, with a `cwd` filter. Selecting a rollout opens the full renderer.
+The standalone viewer lists indexed rollouts in a sortable table, defaulting to last modified time, with a `cwd` filter whose options default to modified-time order and can switch back to name order. Selecting a rollout opens the full renderer.
 
 ## Usage
 

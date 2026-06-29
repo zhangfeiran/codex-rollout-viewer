@@ -2403,6 +2403,7 @@ export async function renderLocalCodexRolloutDocument() {
       direction: "desc"
     };
     let indexCwdFilter = "";
+    let indexCwdSort = "modified";
 
     function getStatusNode() {
       return document.querySelector("[data-status]");
@@ -2753,18 +2754,47 @@ export async function renderLocalCodexRolloutDocument() {
       return new Set(items.map(item => item.cwd || "(unknown cwd)")).size;
     }
 
+    function getCwdOptionStats(items) {
+      const stats = new Map();
+      for (const item of items) {
+        const cwd = item.cwd || "(unknown cwd)";
+        const current = stats.get(cwd) || {
+          cwd,
+          count: 0,
+          latestModified: 0
+        };
+        current.count += 1;
+        current.latestModified = Math.max(current.latestModified, item.modifiedAt || item.createdAt || 0);
+        stats.set(cwd, current);
+      }
+      return [...stats.values()];
+    }
+
+    function compareCwdNames(a, b) {
+      if (a.cwd === "(unknown cwd)") {
+        return 1;
+      }
+      if (b.cwd === "(unknown cwd)") {
+        return -1;
+      }
+      return a.cwd.localeCompare(b.cwd, undefined, {
+        numeric: true,
+        sensitivity: "base"
+      });
+    }
+
     function getCwdOptions(items) {
-      return [...new Set(items.map(item => item.cwd || "(unknown cwd)"))].sort((a, b) => {
-        if (a === "(unknown cwd)") {
+      return getCwdOptionStats(items).sort((a, b) => {
+        if (indexCwdSort === "name") {
+          return compareCwdNames(a, b);
+        }
+        if (a.cwd === "(unknown cwd)") {
           return 1;
         }
-        if (b === "(unknown cwd)") {
+        if (b.cwd === "(unknown cwd)") {
           return -1;
         }
-        return a.localeCompare(b, undefined, {
-          numeric: true,
-          sensitivity: "base"
-        });
+        return (b.latestModified || 0) - (a.latestModified || 0) || compareCwdNames(a, b);
       });
     }
 
@@ -2782,7 +2812,14 @@ export async function renderLocalCodexRolloutDocument() {
           <span>CWD</span>
           <select data-cwd-filter>
             <option value="">All cwd</option>
-            ${options.map(cwd => `<option value="${escapeAttribute(cwd)}" ${cwd === indexCwdFilter ? "selected" : ""}>${escapeHtml(cwd)}</option>`).join("")}
+            ${options.map(option => `<option value="${escapeAttribute(option.cwd)}" ${option.cwd === indexCwdFilter ? "selected" : ""}>${escapeHtml(option.cwd)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="standalone-filter-control">
+          <span>Sort cwd</span>
+          <select data-cwd-sort>
+            <option value="modified" ${indexCwdSort === "modified" ? "selected" : ""}>Modified</option>
+            <option value="name" ${indexCwdSort === "name" ? "selected" : ""}>Name</option>
           </select>
         </label>
       `;
@@ -3129,6 +3166,9 @@ export async function renderLocalCodexRolloutDocument() {
     document.addEventListener("change", event => {
       if (event.target.matches("[data-cwd-filter]")) {
         indexCwdFilter = event.target.value;
+        renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
+      } else if (event.target.matches("[data-cwd-sort]")) {
+        indexCwdSort = event.target.value === "name" ? "name" : "modified";
         renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
       } else if (event.target.matches("[data-file-input]")) {
         const sources = getSourcesFromFiles(event.target.files || []);
