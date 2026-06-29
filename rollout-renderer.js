@@ -379,9 +379,7 @@ body.codex-rollout-page {
 
 .rollout-assistant-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   color: var(--wh-rollout-fg);
   font-size: 13px;
   font-weight: 650;
@@ -997,12 +995,12 @@ function formatDuration(milliseconds) {
   return `${hours}h ${minuteRemainder}m`;
 }
 
-function getFileName() {
+function getFileName(sourceUrl = location.href, fallback = "rollout.jsonl") {
   try {
-    const pathname = decodeURIComponent(new URL(location.href).pathname);
-    return pathname.split("/").filter(Boolean).pop() || "rollout.jsonl";
+    const pathname = decodeURIComponent(new URL(sourceUrl, location.href).pathname);
+    return pathname.split("/").filter(Boolean).pop() || fallback;
   } catch {
-    return "rollout.jsonl";
+    return fallback;
   }
 }
 
@@ -1226,15 +1224,23 @@ function createRenderableRecords(records) {
   });
 }
 
-function summarizeText(value, maxLength = 90) {
-  const text = String(value ?? "")
+function getCompactText(value) {
+  return String(value ?? "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function summarizeText(value, maxLength = 90) {
+  const text = getCompactText(value);
   if (!text) {
     return "No text";
   }
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
+function getFullTitleText(value) {
+  return getCompactText(value) || "No text";
 }
 
 function getRecordKind(record) {
@@ -1323,10 +1329,10 @@ function renderKeyValueList(items) {
   return rows.length ? `<dl class="rollout-kv">${rows.join("")}</dl>` : "";
 }
 
-function renderHeader(records, parseErrors) {
+function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
   const stats = summarizeRecords(records, parseErrors);
-  const title = session?.id ? `Codex Rollout ${session.id}` : getFileName();
+  const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
   const chips = [
     session?.cwd,
     session?.model_provider,
@@ -1456,9 +1462,11 @@ function buildGroupSections(group) {
 
   for (const record of group.records) {
     if (isAgentOutputRecord(record)) {
+      const text = getMessageText(record);
       currentAssistantSection = {
         id: `assistant-${record.line}`,
-        title: summarizeText(getMessageText(record), 100),
+        title: getFullTitleText(text),
+        navTitle: summarizeText(text, 100),
         records: [record],
         standalone: false
       };
@@ -1482,9 +1490,9 @@ function buildGroupSections(group) {
   return sections;
 }
 
-function renderSidebar(records, groups, errors, callById) {
+function renderSidebar(records, groups, errors, callById, options = {}) {
   const session = getSessionMeta(records);
-  const fileName = getFileName();
+  const fileName = options.fileName || getFileName(options.sourceUrl);
   return `
     <aside class="rollout-sidebar" aria-label="Rollout outline">
       <p class="rollout-tree-title">Outline</p>
@@ -1521,15 +1529,16 @@ function renderSidebarGroup(group, callById) {
 }
 
 function renderSidebarAssistantSection(section, callById) {
+  const title = section.navTitle || section.title;
   const children = section.records
     .slice(1)
     .map(record => `<a href="#record-${record.line}">${escapeHtml(getRecordTitle(record, callById))}</a>`)
     .join("");
   return `
     <details data-rollout-level="2" data-rollout-nav-target="${escapeAttribute(section.id)}">
-      <summary><span class="rollout-nav-label">${escapeHtml(section.title)}</span></summary>
+      <summary><span class="rollout-nav-label">${escapeHtml(title)}</span></summary>
       <div class="rollout-tree-children">
-        <a href="#${escapeAttribute(section.id)}">${escapeHtml(section.title)}</a>
+        <a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>
         ${children}
       </div>
     </details>
@@ -1792,14 +1801,16 @@ function createMeta(name, content) {
   return meta;
 }
 
-function renderDocument(records, errors) {
+function renderDocument(records, errors, options = {}) {
   const session = getSessionMeta(records);
-  const title = session?.id ? `Codex Rollout ${session.id}` : getFileName().replace(/\.jsonl$/i, "");
+  const sourceUrl = options.sourceUrl || location.href;
+  const fileName = options.fileName || getFileName(sourceUrl);
+  const title = session?.id ? `Codex Rollout ${session.id}` : fileName.replace(/\.jsonl$/i, "");
   const charset = document.createElement("meta");
   charset.setAttribute("charset", "utf-8");
   const viewport = createMeta("viewport", "width=device-width, initial-scale=1");
-  const source = createMeta(SOURCE_META, location.href);
-  const canonical = createMeta(CANONICAL_META, location.href);
+  const source = createMeta(SOURCE_META, sourceUrl);
+  const canonical = createMeta(CANONICAL_META, sourceUrl);
   const titleElement = document.createElement("title");
   titleElement.textContent = title;
   const style = document.createElement("style");
@@ -1828,9 +1839,9 @@ function renderDocument(records, errors) {
   article.className = "codex-rollout";
   article.dataset.codexRolloutRendered = "true";
   article.innerHTML = `
-    ${renderSidebar(records, groups, errors, callById)}
+    ${renderSidebar(records, groups, errors, callById, { fileName, sourceUrl })}
     <main class="rollout-main">
-      ${renderHeader(records, errors)}
+      ${renderHeader(records, errors, { fileName, sourceUrl })}
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
         ${groups.map(group => renderTurnGroup(group, context)).join("")}
@@ -1897,7 +1908,14 @@ function initRolloutControls() {
 
 function getRuntimeUrl(path) {
   try {
-    return chrome.runtime.getURL(path);
+    if (globalThis.chrome?.runtime?.getURL) {
+      return chrome.runtime.getURL(path);
+    }
+  } catch {
+    // Fall through to the module-relative path for the standalone HTML viewer.
+  }
+  try {
+    return new URL(path, import.meta.url).href;
   } catch {
     return null;
   }
@@ -1970,6 +1988,29 @@ async function highlightCodeBlocks() {
   } catch (error) {
     console.warn("[codex-rollout-viewer] Highlight.js unavailable", error);
   }
+}
+
+export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
+  ensureDocumentStructure();
+  const parsed = parseCodexRolloutJsonl(jsonl);
+  if (!isCodexRolloutRecords(parsed.records)) {
+    return {
+      rendered: false,
+      records: parsed.records.length,
+      errors: parsed.errors
+    };
+  }
+  const records = createRenderableRecords(parsed.records);
+  renderDocument(records, parsed.errors, {
+    fileName: options.fileName,
+    sourceUrl: options.sourceUrl || options.fileName || location.href
+  });
+  await highlightCodeBlocks();
+  return {
+    rendered: true,
+    records: records.length,
+    errors: parsed.errors
+  };
 }
 
 export async function renderLocalCodexRolloutDocument() {
