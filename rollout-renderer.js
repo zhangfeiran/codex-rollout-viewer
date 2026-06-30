@@ -389,6 +389,57 @@ body.codex-rollout-page {
   min-width: 0;
 }
 
+.rollout-compact-section {
+  border-top: 1px solid var(--wh-rollout-border-muted);
+}
+
+.rollout-compact-section > summary {
+  display: grid;
+  grid-template-columns: 18px minmax(28px, 1fr) max-content minmax(28px, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+  background: rgba(210, 153, 34, 0.05);
+}
+
+.rollout-compact-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rollout-compact-section > summary::before {
+  content: ">";
+  display: inline-block;
+  color: var(--wh-rollout-yellow);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.rollout-compact-section[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.rollout-compact-rule {
+  min-width: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(210, 153, 34, 0.65), transparent);
+}
+
+.rollout-compact-title {
+  color: var(--wh-rollout-yellow);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rollout-compact-body {
+  min-width: 0;
+  border-top: 1px dashed rgba(210, 153, 34, 0.25);
+}
+
 .rollout-entry {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
@@ -1185,6 +1236,10 @@ function getRecordPriority(record) {
 
 function shouldDropRecord(record) {
   const payloadType = getPayloadType(record);
+  const payload = record.value?.payload ?? {};
+  if (record.value?.type === "event_msg" && payloadType === "agent_message" && payload.phase === "final_answer") {
+    return true;
+  }
   return payloadType === "reasoning" || payloadType === "token_count";
 }
 
@@ -1279,6 +1334,14 @@ function isMessageLikeRecord(record) {
 function isAgentOutputRecord(record) {
   const role = getPayloadRole(record);
   return role === "assistant" || role === "agent";
+}
+
+function isContextCompactRecord(record) {
+  return record.value?.type === "compacted" || getPayloadType(record) === "context_compacted";
+}
+
+function isContextCompactFollowupRecord(record) {
+  return record.value?.type === "turn_context" || getPayloadType(record) === "context_compacted";
 }
 
 function getOutputExitCode(output) {
@@ -1459,9 +1522,13 @@ function summarizeGroup(group) {
 function buildGroupSections(group) {
   const sections = [];
   let currentAssistantSection = null;
+  let currentCompactSection = null;
+  let currentActivitySection = null;
 
   for (const record of group.records) {
     if (isAgentOutputRecord(record)) {
+      currentCompactSection = null;
+      currentActivitySection = null;
       const text = getMessageText(record);
       currentAssistantSection = {
         id: `assistant-${record.line}`,
@@ -1474,11 +1541,69 @@ function buildGroupSections(group) {
       continue;
     }
 
+    if (isContextCompactRecord(record)) {
+      if (currentCompactSection && !currentActivitySection && record.value?.type !== "compacted") {
+        currentCompactSection.records.push(record);
+      } else {
+        currentAssistantSection = null;
+        currentActivitySection = null;
+        currentCompactSection = {
+          id: `compact-${record.line}`,
+          kind: "compact",
+          title: "Context compacted",
+          navTitle: "Context compacted",
+          records: [record],
+          standalone: false
+        };
+        sections.push(currentCompactSection);
+      }
+      continue;
+    }
+
+    if (currentCompactSection && isContextCompactFollowupRecord(record)) {
+      currentCompactSection.records.push(record);
+      continue;
+    }
+
+    if (currentCompactSection && !isUserMessageRecord(record)) {
+      if (!currentActivitySection) {
+        currentActivitySection = {
+          id: `post-compact-${record.line}`,
+          kind: "activity",
+          title: "Post-compact activity",
+          navTitle: "Post-compact activity",
+          records: [],
+          standalone: false
+        };
+        sections.push(currentActivitySection);
+      }
+      currentActivitySection.records.push(record);
+      continue;
+    }
+
     if (currentAssistantSection && !isUserMessageRecord(record)) {
       currentAssistantSection.records.push(record);
       continue;
     }
 
+    if (!isUserMessageRecord(record)) {
+      if (!currentActivitySection) {
+        currentActivitySection = {
+          id: `activity-${record.line}`,
+          kind: "activity",
+          title: "Activity without assistant",
+          navTitle: "Activity without assistant",
+          records: [],
+          standalone: false
+        };
+        sections.push(currentActivitySection);
+      }
+      currentActivitySection.records.push(record);
+      continue;
+    }
+
+    currentCompactSection = null;
+    currentActivitySection = null;
     sections.push({
       id: `entry-${record.line}`,
       title: getRecordTitle(record),
@@ -1657,6 +1782,32 @@ function renderEvent(record) {
   });
 }
 
+function renderContextCompactRecord(record) {
+  const payload = record.value?.payload ?? {};
+  const replacementHistory = Array.isArray(payload.replacement_history) ? payload.replacement_history : null;
+  const replacementRoles = replacementHistory
+    ? replacementHistory.reduce((counts, item) => {
+      const role = item?.role || item?.type || "item";
+      counts.set(role, (counts.get(role) || 0) + 1);
+      return counts;
+    }, new Map())
+    : null;
+  const roleSummary = replacementRoles
+    ? [...replacementRoles.entries()].map(([role, count]) => `${role}: ${formatNumber(count)}`).join(", ")
+    : "";
+  const body = renderKeyValueList([
+    ["Type", record.value?.type === "compacted" ? "compacted" : getPayloadType(record)],
+    ["Replacement History", replacementHistory ? `${formatNumber(replacementHistory.length)} items` : null],
+    ["Roles", roleSummary],
+    ["Message", payload.message],
+    ["Turn", payload.turn_id]
+  ]) || `<p class="rollout-empty">Context was compacted.</p>`;
+  return renderEntry(record, "event", "context compacted", body, {
+    kind: "context-compact",
+    roleClass: "rollout-role-event"
+  });
+}
+
 function renderSessionMeta(record) {
   const payload = record.value?.payload ?? {};
   const body = renderKeyValueList([
@@ -1701,6 +1852,9 @@ function renderUnknown(record) {
 
 function renderRecord(record, context) {
   const value = record.value;
+  if (isContextCompactRecord(record)) {
+    return renderContextCompactRecord(record);
+  }
   if (value?.type === "session_meta") {
     return renderSessionMeta(record);
   }
@@ -1760,9 +1914,38 @@ function renderAssistantSection(section, context) {
   `;
 }
 
+function renderCompactSection(section, context) {
+  const firstRecord = section.records[0];
+  const timestamp = formatTimestamp(firstRecord?.value?.timestamp);
+  const compacted = section.records.find(record => record.value?.type === "compacted");
+  const replacementHistory = compacted?.value?.payload?.replacement_history;
+  const replacementCount = Array.isArray(replacementHistory) ? replacementHistory.length : 0;
+  const meta = [
+    timestamp,
+    replacementCount ? `${formatNumber(replacementCount)} history items` : "",
+    `${formatNumber(section.records.length)} events`
+  ].filter(Boolean).join(" / ");
+  return `
+    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
+      <summary>
+        <span class="rollout-compact-rule"></span>
+        <span class="rollout-compact-title">${escapeHtml(section.title)}</span>
+        <span class="rollout-compact-rule"></span>
+        <span class="rollout-count">${escapeHtml(meta)}</span>
+      </summary>
+      <div class="rollout-compact-body">
+        ${section.records.map(record => renderRecord(record, context)).join("")}
+      </div>
+    </details>
+  `;
+}
+
 function renderGroupSection(section, context) {
   if (section.standalone) {
     return section.records.map(record => renderRecord(record, context)).join("");
+  }
+  if (section.kind === "compact") {
+    return renderCompactSection(section, context);
   }
   return renderAssistantSection(section, context);
 }
