@@ -335,13 +335,14 @@
       <div class="standalone-actions">
         <button class="standalone-file-button" type="button" data-open-sessions-directory>Open .codex/sessions</button>
         <button class="standalone-file-button" type="button" data-saved-directory hidden>Reuse saved folder</button>
+        <button class="standalone-file-button" type="button" data-open-jsonl-file>Choose JSONL</button>
         <label class="standalone-file-button">
           <input type="file" webkitdirectory multiple data-folder-input>
           Choose folder
         </label>
-        <label class="standalone-file-button">
+        <label class="standalone-file-button" data-file-input-fallback>
           <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input>
-          Choose JSONL
+          Choose JSONL file
         </label>
       </div>
       <p class="standalone-status" data-status>Waiting for sessions access.</p>
@@ -361,6 +362,7 @@ const LONG_MESSAGE_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 const LONG_OUTPUT_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 
 let codeHighlightScriptPromise = null;
+let lazyRolloutContentStore = new Map();
 
 const ROLLOUT_CSS = `
 :root {
@@ -991,6 +993,47 @@ pre + .rollout-kv,
   margin-top: 2px;
 }
 
+.rollout-plan-markdown {
+  margin-top: 7px;
+}
+
+.rollout-plan-markdown ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.rollout-plan-markdown li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.rollout-plan-icon {
+  line-height: 1.4;
+  text-align: center;
+}
+
+.rollout-plan-status-completed {
+  color: var(--wh-rollout-green);
+}
+
+.rollout-plan-status-in-progress {
+  color: var(--wh-rollout-cyan);
+}
+
+.rollout-plan-status-pending {
+  color: var(--wh-rollout-muted);
+}
+
+.rollout-plan-status-unknown {
+  color: var(--wh-rollout-yellow);
+}
+
+.rollout-plan-explanation {
+  color: var(--wh-rollout-muted);
+}
+
 .markdown-lite blockquote {
   padding-left: 10px;
   color: var(--wh-rollout-muted);
@@ -1014,6 +1057,202 @@ pre + .rollout-kv,
 
 .rollout-details[open] > summary {
   margin-bottom: 6px;
+}
+
+.rollout-patch-details[open] > summary {
+  margin-bottom: 0;
+}
+
+.rollout-diff {
+  margin-top: 7px;
+  overflow: hidden;
+  border: 1px solid var(--wh-rollout-border-muted);
+  border-radius: 6px;
+  background: #0d1117;
+}
+
+.rollout-diff-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--wh-rollout-border-muted);
+  background: rgba(88, 166, 255, 0.05);
+}
+
+.rollout-diff-stats {
+  color: var(--wh-rollout-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.rollout-diff-mode {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--wh-rollout-border-muted);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rollout-diff-mode button {
+  border: 0;
+  border-radius: 3px;
+  padding: 3px 8px;
+  color: var(--wh-rollout-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rollout-diff-mode button[aria-pressed="true"] {
+  color: var(--wh-rollout-fg);
+  background: var(--wh-rollout-panel-strong);
+}
+
+.rollout-diff-file {
+  border: 0;
+}
+
+.rollout-diff-file + .rollout-diff-file {
+  border-top: 1px solid var(--wh-rollout-border-muted);
+}
+
+.rollout-diff-file > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.rollout-diff-file > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rollout-diff-file > summary::before {
+  content: ">";
+  color: var(--wh-rollout-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.rollout-diff-file[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.rollout-diff-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wh-rollout-fg);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rollout-diff-file-stat {
+  color: var(--wh-rollout-subtle);
+  font-size: 12px;
+}
+
+.rollout-diff-body {
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rollout-diff-view {
+  display: none;
+}
+
+.rollout-diff.is-unified .rollout-diff-unified,
+.rollout-diff.is-split .rollout-diff-split {
+  display: block;
+}
+
+.rollout-diff-row,
+.rollout-diff-cell {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-height: 18px;
+}
+
+.rollout-diff-prefix {
+  color: var(--wh-rollout-subtle);
+  text-align: center;
+  user-select: none;
+}
+
+.rollout-diff-line {
+  min-width: 0;
+  overflow: visible;
+  padding-right: 10px;
+  white-space: pre;
+}
+
+.rollout-diff-row-add,
+.rollout-diff-cell-add {
+  background: rgba(63, 185, 80, 0.13);
+}
+
+.rollout-diff-row-add .rollout-diff-prefix,
+.rollout-diff-cell-add .rollout-diff-prefix {
+  color: var(--wh-rollout-green);
+}
+
+.rollout-diff-row-delete,
+.rollout-diff-cell-delete {
+  background: rgba(255, 107, 107, 0.14);
+}
+
+.rollout-diff-row-delete .rollout-diff-prefix,
+.rollout-diff-cell-delete .rollout-diff-prefix {
+  color: var(--wh-rollout-red);
+}
+
+.rollout-diff-row-hunk,
+.rollout-diff-split-meta.is-hunk {
+  color: var(--wh-rollout-cyan);
+  background: rgba(57, 197, 207, 0.08);
+}
+
+.rollout-diff-row-meta,
+.rollout-diff-split-meta.is-meta {
+  color: var(--wh-rollout-muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.rollout-diff-split {
+  min-width: 860px;
+}
+
+.rollout-diff-split-row {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+  min-height: 18px;
+}
+
+.rollout-diff-cell + .rollout-diff-cell {
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.rollout-diff-cell.is-blank {
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.rollout-diff-split-meta {
+  grid-column: 1 / -1;
+  min-height: 18px;
+  padding: 0 10px;
+  white-space: pre;
 }
 
 .rollout-muted {
@@ -1326,7 +1565,10 @@ function truncateText(value, maxLength = MAX_DISPLAY_TEXT_LENGTH) {
   if (text.length <= maxLength) {
     return text;
   }
-  return `${text.slice(0, maxLength)}\n\n... ${text.length - maxLength} characters omitted by rollout renderer ...`;
+  const tailLength = Math.max(1, Math.floor(maxLength * 0.35));
+  const headLength = Math.max(1, maxLength - tailLength);
+  const omittedLength = Math.max(0, text.length - headLength - tailLength);
+  return `${text.slice(0, headLength)}\n\n... ${omittedLength} characters omitted by rollout renderer ...\n\n${text.slice(-tailLength)}`;
 }
 
 function normalizeLanguage(language) {
@@ -1338,11 +1580,12 @@ function renderCodeBlock(value, language = "plaintext") {
   return `<pre><code class="language-${escapeAttribute(normalizeLanguage(language))}">${escapeHtml(truncateText(value))}</code></pre>`;
 }
 
-function renderCollapsibleHtml(summary, html, rawLength, threshold = LONG_CONTENT_COLLAPSE_LENGTH) {
+function renderCollapsibleHtml(summary, html, rawLength, threshold = LONG_CONTENT_COLLAPSE_LENGTH, stateKey = "") {
   if (!Number.isFinite(rawLength) || rawLength <= threshold) {
     return html;
   }
-  return `<details class="rollout-details"><summary>${escapeHtml(summary)}, ${formatNumber(rawLength)} characters</summary>${html}</details>`;
+  const stateAttribute = stateKey ? ` data-rollout-state-key="${escapeAttribute(stateKey)}"` : "";
+  return `<details class="rollout-details"${stateAttribute}><summary>${escapeHtml(summary)}, ${formatNumber(rawLength)} characters</summary>${html}</details>`;
 }
 
 function renderMarkdownContent(value) {
@@ -1448,9 +1691,28 @@ function stringifyCompact(value) {
   }
 }
 
-function renderDetails(summary, value, language = "json") {
+function renderDetails(summary, value, language = "json", stateKey = "") {
   const code = language === "json" ? stringifyCompact(value) : truncateText(value, MAX_DETAILS_STRING_LENGTH);
-  return `<details class="rollout-details"><summary>${escapeHtml(summary)}</summary>${renderCodeBlock(code, language)}</details>`;
+  const stateAttribute = stateKey ? ` data-rollout-state-key="${escapeAttribute(stateKey)}"` : "";
+  return `<details class="rollout-details"${stateAttribute}><summary>${escapeHtml(summary)}</summary>${renderCodeBlock(code, language)}</details>`;
+}
+
+function storeLazyRolloutContent(value) {
+  const key = `lazy-${lazyRolloutContentStore.size + 1}`;
+  lazyRolloutContentStore.set(key, value);
+  return key;
+}
+
+function renderLazyCodeDetails(summary, value, language = "json", stateKey = "") {
+  const code = language === "json" ? stringifyCompact(value) : truncateText(value, MAX_DETAILS_STRING_LENGTH);
+  const stateAttribute = stateKey ? ` data-rollout-state-key="${escapeAttribute(stateKey)}"` : "";
+  const lazyKey = storeLazyRolloutContent(code);
+  return `
+    <details class="rollout-details"${stateAttribute} data-rollout-lazy-code data-rollout-language="${escapeAttribute(language)}" data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
+      <summary>${escapeHtml(summary)}</summary>
+      <div data-rollout-lazy-code-body></div>
+    </details>
+  `;
 }
 
 function parseArguments(argumentsValue) {
@@ -1462,6 +1724,300 @@ function parseArguments(argumentsValue) {
   } catch {
     return argumentsValue;
   }
+}
+
+function isToolName(name, expected) {
+  return new RegExp(`(^|[.])${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(String(name ?? ""));
+}
+
+function getPlanStatusMeta(status) {
+  const normalized = String(status || "pending").toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "completed") {
+    return {
+      status: "completed",
+      label: "completed",
+      icon: "&#10003;"
+    };
+  }
+  if (normalized === "in_progress") {
+    return {
+      status: "in-progress",
+      label: "in progress",
+      icon: "&#9654;"
+    };
+  }
+  if (normalized === "pending") {
+    return {
+      status: "pending",
+      label: "pending",
+      icon: "&#9675;"
+    };
+  }
+  return {
+    status: "unknown",
+    label: normalized || "unknown",
+    icon: "&#8226;"
+  };
+}
+
+function renderUpdatePlanMarkdown(args) {
+  if (!args || typeof args != "object" || Array.isArray(args)) {
+    return "";
+  }
+  const plan = Array.isArray(args.plan) ? args.plan : [];
+  const explanation = typeof args.explanation == "string" ? args.explanation.trim() : "";
+  if (!plan.length && !explanation) {
+    return "";
+  }
+  const explanationHtml = explanation
+    ? `<p class="rollout-plan-explanation">${escapeHtml(explanation)}</p>`
+    : "";
+  const planHtml = plan.length
+    ? `<ul>${plan.map(item => {
+      const step = typeof item == "string" ? item : item?.step ?? item?.title ?? "";
+      const meta = getPlanStatusMeta(typeof item == "string" ? "pending" : item?.status);
+      return `
+        <li>
+          <span class="rollout-plan-icon rollout-plan-status-${escapeAttribute(meta.status)}" title="${escapeAttribute(meta.label)}" aria-label="${escapeAttribute(meta.label)}">${meta.icon}</span>
+          <span>${escapeHtml(step)}</span>
+        </li>
+      `;
+    }).join("")}</ul>`
+    : "";
+  return `<div class="markdown-lite rollout-plan-markdown">${explanationHtml}${planHtml}</div>`;
+}
+
+function getApplyPatchText(payload, args) {
+  const toolName = String(payload?.name ?? "");
+  if (!isToolName(toolName, "apply_patch")) {
+    return null;
+  }
+  if (typeof payload?.input == "string" && payload.input.includes("*** Begin Patch")) {
+    return payload.input;
+  }
+  if (typeof args == "string") {
+    return args;
+  }
+  if (!args || typeof args != "object" || Array.isArray(args)) {
+    return typeof payload?.arguments == "string" ? payload.arguments : null;
+  }
+  for (const key of ["patch", "input", "text", "command"]) {
+    if (typeof args[key] == "string" && args[key].includes("*** Begin Patch")) {
+      return args[key];
+    }
+  }
+  return typeof payload?.arguments == "string" && payload.arguments.includes("*** Begin Patch")
+    ? payload.arguments
+    : null;
+}
+
+function parseApplyPatch(patchText) {
+  const files = [];
+  let current = null;
+  let inPatch = false;
+  for (const rawLine of String(patchText ?? "").replace(/\r\n/g, "\n").split("\n")) {
+    if (rawLine === "*** Begin Patch") {
+      inPatch = true;
+      continue;
+    }
+    if (!inPatch || rawLine === "*** End Patch") {
+      continue;
+    }
+    const fileMatch = rawLine.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/);
+    if (fileMatch) {
+      current = {
+        path: fileMatch[1],
+        lines: [],
+        additions: 0,
+        deletions: 0
+      };
+      files.push(current);
+      continue;
+    }
+    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/);
+    if (moveMatch && current) {
+      current.moveTo = moveMatch[1];
+      current.lines.push({
+        type: "meta",
+        text: rawLine
+      });
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    let type = "context";
+    let text = rawLine;
+    if (rawLine.startsWith("@@")) {
+      type = "hunk";
+    } else if (rawLine.startsWith("+")) {
+      type = "add";
+      text = rawLine.slice(1);
+      current.additions += 1;
+    } else if (rawLine.startsWith("-")) {
+      type = "delete";
+      text = rawLine.slice(1);
+      current.deletions += 1;
+    } else if (rawLine.startsWith(" ")) {
+      text = rawLine.slice(1);
+    } else if (rawLine.startsWith("***")) {
+      type = "meta";
+    }
+    current.lines.push({ type, text });
+  }
+  return files;
+}
+
+function getPatchStats(files) {
+  return files.reduce((stats, file) => {
+    stats.files += 1;
+    stats.additions += file.additions;
+    stats.deletions += file.deletions;
+    return stats;
+  }, {
+    files: 0,
+    additions: 0,
+    deletions: 0
+  });
+}
+
+function getDiffLineClass(type, prefix) {
+  if (type === "add") {
+    return `${prefix}-add`;
+  }
+  if (type === "delete") {
+    return `${prefix}-delete`;
+  }
+  if (type === "hunk") {
+    return `${prefix}-hunk`;
+  }
+  if (type === "meta") {
+    return `${prefix}-meta`;
+  }
+  return "";
+}
+
+function renderUnifiedDiffLine(line) {
+  const prefix = line.type === "add" ? "+" : line.type === "delete" ? "-" : line.type === "hunk" ? "@" : " ";
+  const text = line.type === "hunk" ? `@ ${line.text.replace(/^@@\s*/, "")}` : line.text;
+  return `
+    <div class="rollout-diff-row ${getDiffLineClass(line.type, "rollout-diff-row")}">
+      <span class="rollout-diff-prefix">${escapeHtml(prefix)}</span>
+      <span class="rollout-diff-line">${escapeHtml(text)}</span>
+    </div>
+  `;
+}
+
+function renderSplitDiffCell(line, extraClass = "") {
+  if (!line) {
+    return `<div class="rollout-diff-cell is-blank ${extraClass}"><span class="rollout-diff-prefix"></span><span class="rollout-diff-line"></span></div>`;
+  }
+  const prefix = line.type === "add" ? "+" : line.type === "delete" ? "-" : " ";
+  return `
+    <div class="rollout-diff-cell ${getDiffLineClass(line.type, "rollout-diff-cell")} ${extraClass}">
+      <span class="rollout-diff-prefix">${escapeHtml(prefix)}</span>
+      <span class="rollout-diff-line">${escapeHtml(line.text)}</span>
+    </div>
+  `;
+}
+
+function renderSplitDiffRows(lines) {
+  const rows = [];
+  let pendingDeletes = [];
+  for (const line of lines) {
+    if (line.type === "hunk" || line.type === "meta") {
+      while (pendingDeletes.length) {
+        rows.push(`
+          <div class="rollout-diff-split-row">
+            ${renderSplitDiffCell(pendingDeletes.shift())}
+            ${renderSplitDiffCell(null)}
+          </div>
+        `);
+      }
+      rows.push(`<div class="rollout-diff-split-row"><div class="rollout-diff-split-meta is-${escapeAttribute(line.type)}">${escapeHtml(line.text)}</div></div>`);
+      continue;
+    }
+    if (line.type === "delete") {
+      pendingDeletes.push(line);
+      continue;
+    }
+    if (line.type === "add") {
+      const deleted = pendingDeletes.shift() || null;
+      rows.push(`
+        <div class="rollout-diff-split-row">
+          ${renderSplitDiffCell(deleted)}
+          ${renderSplitDiffCell(line)}
+        </div>
+      `);
+      continue;
+    }
+    while (pendingDeletes.length) {
+      rows.push(`
+        <div class="rollout-diff-split-row">
+          ${renderSplitDiffCell(pendingDeletes.shift())}
+          ${renderSplitDiffCell(null)}
+        </div>
+      `);
+    }
+    rows.push(`
+      <div class="rollout-diff-split-row">
+        ${renderSplitDiffCell(line)}
+        ${renderSplitDiffCell(line)}
+      </div>
+    `);
+  }
+  while (pendingDeletes.length) {
+    rows.push(`
+      <div class="rollout-diff-split-row">
+        ${renderSplitDiffCell(pendingDeletes.shift())}
+        ${renderSplitDiffCell(null)}
+      </div>
+    `);
+  }
+  return rows.join("");
+}
+
+function renderPatchFileBody(lines) {
+  return `
+    <div class="rollout-diff-view rollout-diff-unified">${lines.map(renderUnifiedDiffLine).join("")}</div>
+    <div class="rollout-diff-view rollout-diff-split">${renderSplitDiffRows(lines)}</div>
+  `;
+}
+
+function renderPatchFileShell(file, index, record) {
+  const lazyKey = storeLazyRolloutContent(file.lines);
+  return `
+    <details class="rollout-diff-file" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-file-${index}" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
+      <summary>
+        <span class="rollout-diff-path">${escapeHtml(file.moveTo ? `${file.path} -> ${file.moveTo}` : file.path)}</span>
+        <span class="rollout-diff-file-stat">+${formatNumber(file.additions)} -${formatNumber(file.deletions)}</span>
+      </summary>
+      <div class="rollout-diff-body" data-rollout-diff-file-body></div>
+    </details>
+  `;
+}
+
+function renderApplyPatchDiff(patchText, record) {
+  const files = parseApplyPatch(patchText);
+  if (!files.length) {
+    return "";
+  }
+  const stats = getPatchStats(files);
+  return `
+    <details class="rollout-details rollout-patch-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch">
+      <summary>Patch diff, ${formatNumber(stats.files)} files, +${formatNumber(stats.additions)} -${formatNumber(stats.deletions)}</summary>
+      <div class="rollout-diff is-unified" data-rollout-diff data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-mode">
+        <div class="rollout-diff-toolbar">
+          <span class="rollout-diff-stats">${formatNumber(stats.files)} files changed, +${formatNumber(stats.additions)} -${formatNumber(stats.deletions)}</span>
+          <span class="rollout-diff-mode" role="group" aria-label="Diff view mode">
+            <button type="button" data-rollout-diff-mode="unified" aria-pressed="true">Unified</button>
+            <button type="button" data-rollout-diff-mode="split" aria-pressed="false">Split</button>
+          </span>
+        </div>
+        ${files.map((file, index) => renderPatchFileShell(file, index, record)).join("")}
+      </div>
+    </details>
+  `;
 }
 
 function getTimestampMilliseconds(record) {
@@ -1488,6 +2044,14 @@ function getPayloadType(record) {
   return record.value?.payload?.type || record.value?.type || "";
 }
 
+function isFunctionCallPayloadType(type) {
+  return type === "function_call" || type === "custom_tool_call";
+}
+
+function isFunctionOutputPayloadType(type) {
+  return type === "function_call_output" || type === "custom_tool_call_output";
+}
+
 function getPayloadRole(record) {
   const payload = record.value?.payload ?? {};
   if (payload.role) {
@@ -1499,7 +2063,7 @@ function getPayloadRole(record) {
   if (payload.type === "user_message") {
     return "user";
   }
-  if (payload.type === "function_call" || payload.type === "function_call_output") {
+  if (isFunctionCallPayloadType(payload.type) || isFunctionOutputPayloadType(payload.type)) {
     return "tool";
   }
   if (payload.type === "reasoning") {
@@ -1662,10 +2226,10 @@ function getRecordKind(record) {
   if (role === "assistant" || role === "agent") {
     return "assistant";
   }
-  if (payloadType === "function_call") {
+  if (isFunctionCallPayloadType(payloadType)) {
     return "tool-call";
   }
-  if (payloadType === "function_call_output") {
+  if (isFunctionOutputPayloadType(payloadType)) {
     return "tool-output";
   }
   if (payloadType === "reasoning") {
@@ -1703,8 +2267,8 @@ function getOutputExitCode(output) {
 
 function summarizeRecords(records, parseErrors) {
   const responseItems = records.filter(record => record.value?.type === "response_item");
-  const calls = responseItems.filter(record => record.value?.payload?.type === "function_call");
-  const outputs = responseItems.filter(record => record.value?.payload?.type === "function_call_output");
+  const calls = responseItems.filter(record => isFunctionCallPayloadType(record.value?.payload?.type));
+  const outputs = responseItems.filter(record => isFunctionOutputPayloadType(record.value?.payload?.type));
   const messageLikes = records.filter(isMessageLikeRecord);
   const events = records.filter(record => record.value?.type === "event_msg");
   const turnIds = new Set(records.map(getTurnId).filter(Boolean));
@@ -1787,10 +2351,10 @@ function getRecordTitle(record, callById = new Map()) {
     }
     return `${role}: ${summarizeText(getMessageText(record), 70)}`;
   }
-  if (payloadType === "function_call") {
+  if (isFunctionCallPayloadType(payloadType)) {
     return `call: ${payload.name || "function"}`;
   }
-  if (payloadType === "function_call_output") {
+  if (isFunctionOutputPayloadType(payloadType)) {
     const call = callById.get(payload.call_id);
     return `output: ${call?.name || payload.call_id || "function"}`;
   }
@@ -1856,9 +2420,9 @@ function summarizeGroup(group) {
   };
   for (const record of group.records) {
     const payloadType = getPayloadType(record);
-    if (payloadType === "function_call") {
+    if (isFunctionCallPayloadType(payloadType)) {
       counts.calls += 1;
-    } else if (payloadType === "function_call_output") {
+    } else if (isFunctionOutputPayloadType(payloadType)) {
       counts.outputs += 1;
       const exitCode = getOutputExitCode(record.value?.payload?.output);
       if (exitCode != null && exitCode !== 0) {
@@ -2011,12 +2575,13 @@ function renderSidebarAssistantSection(section, callById) {
     .slice(1)
     .map(record => `<a href="#record-${record.line}">${escapeHtml(getRecordTitle(record, callById))}</a>`)
     .join("");
+  const lazyChildrenKey = storeLazyRolloutContent(children);
   return `
-    <details data-rollout-level="2" data-rollout-nav-target="${escapeAttribute(section.id)}">
+    <details data-rollout-level="2" data-rollout-nav-target="${escapeAttribute(section.id)}" data-rollout-lazy-sidebar data-rollout-lazy-key="${escapeAttribute(lazyChildrenKey)}">
       <summary><span class="rollout-nav-label">${escapeHtml(title)}</span></summary>
       <div class="rollout-tree-children">
         <a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>
-        ${children}
+        <span data-rollout-lazy-sidebar-body></span>
       </div>
     </details>
   `;
@@ -2055,7 +2620,7 @@ function renderMessage(record) {
     </div>
   `).join("") : `<p class="rollout-empty">No visible message content.</p>`;
   const visibleBody = shouldCollapse
-    ? `<details class="rollout-details"><summary>${escapeHtml(role)} message, ${formatNumber(text.length)} characters</summary>${body}</details>`
+    ? `<details class="rollout-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:message"><summary>${escapeHtml(role)} message, ${formatNumber(text.length)} characters</summary>${body}</details>`
     : body;
   return renderEntry(record, role, `${role} message${phase ? ` (${phase})` : ""}`, visibleBody, {
     kind: getRecordKind(record)
@@ -2071,18 +2636,23 @@ function getCommandFromArguments(args) {
 
 function renderFunctionCall(record) {
   const payload = record.value?.payload ?? {};
-  const args = parseArguments(payload.arguments);
+  const argsSource = payload.arguments ?? payload.input ?? "";
+  const args = parseArguments(argsSource);
   const command = getCommandFromArguments(args);
   const argsText = typeof args == "string" ? args : stringifyCompact(args);
   const commandText = String(command ?? "");
+  const patchText = getApplyPatchText(payload, args);
+  const updatePlanMarkdown = isToolName(payload.name, "update_plan") ? renderUpdatePlanMarkdown(args) : "";
   const body = [
     renderKeyValueList([
       ["Tool", payload.name],
       ["Call ID", payload.call_id],
       ["Workdir", args && typeof args == "object" && !Array.isArray(args) ? args.workdir : null]
     ]),
-    command ? renderCollapsibleHtml("Command", renderCodeBlock(commandText, "shell"), commandText.length) : renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length),
-    command ? renderDetails("Arguments", args) : ""
+    patchText ? renderApplyPatchDiff(patchText, record) : "",
+    updatePlanMarkdown,
+    command ? renderCollapsibleHtml("Command", renderCodeBlock(commandText, "shell"), commandText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:command`) : "",
+    patchText ? renderLazyCodeDetails("Raw arguments", args, "json", `record-${record.line}:raw-arguments`) : updatePlanMarkdown ? "" : command ? renderDetails("Arguments", args, "json", `record-${record.line}:arguments`) : renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`)
   ].filter(Boolean).join("\n");
   return renderEntry(record, "tool", payload.name || "function call", body, {
     kind: "tool-call",
@@ -2099,7 +2669,7 @@ function renderFunctionOutput(record, callById) {
   const className = exitCode != null && exitCode !== 0 ? "is-error" : "";
   const roleClass = exitCode != null && exitCode !== 0 ? "rollout-role-error" : "rollout-role-tool";
   const summary = exitCode == null ? `${formatNumber(output.length)} characters` : `exit ${exitCode}, ${formatNumber(output.length)} characters`;
-  const outputHtml = `<details class="rollout-details"><summary>${escapeHtml(summary)}</summary>${renderCodeBlock(output, "text")}</details>`;
+  const outputHtml = renderLazyCodeDetails(summary, output, "text", `record-${record.line}:output`);
   const body = [
     renderKeyValueList([
       ["Call ID", payload.call_id],
@@ -2121,7 +2691,7 @@ function renderEvent(record) {
   }
   const text = payload.message || payload.text || payload.reason || "";
   const body = text
-    ? renderCollapsibleHtml(payload.type || "event", renderMarkdownContent(text), String(text).length)
+    ? renderCollapsibleHtml(payload.type || "event", renderMarkdownContent(text), String(text).length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:event`)
     : renderKeyValueList([
       ["Type", payload.type || record.value?.type],
       ["Turn", payload.turn_id],
@@ -2224,10 +2794,10 @@ function renderRecord(record, context) {
   if (payloadType === "message") {
     return renderMessage(record);
   }
-  if (payloadType === "function_call") {
+  if (isFunctionCallPayloadType(payloadType)) {
     return renderFunctionCall(record);
   }
-  if (payloadType === "function_call_output") {
+  if (isFunctionOutputPayloadType(payloadType)) {
     return renderFunctionOutput(record, context.callById);
   }
   if (payloadType === "reasoning") {
@@ -2254,7 +2824,7 @@ function renderParseErrors(errors) {
 
 function renderAssistantSection(section, context) {
   return `
-    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
+    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
       <summary>
         <span class="rollout-assistant-title">${escapeHtml(section.title)}</span>
         <span class="rollout-count">${formatNumber(section.records.length)}</span>
@@ -2278,7 +2848,7 @@ function renderCompactSection(section, context) {
     `${formatNumber(section.records.length)} events`
   ].filter(Boolean).join(" / ");
   return `
-    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
+    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
       <summary>
         <span class="rollout-compact-rule"></span>
         <span class="rollout-compact-title">${escapeHtml(section.title)}</span>
@@ -2306,6 +2876,7 @@ function renderTurnGroup(group, context) {
   const counts = summarizeGroup(group);
   const title = group.isPreamble ? "Preamble" : group.title;
   const sections = buildGroupSections(group);
+  const lazyBodyKey = storeLazyRolloutContent(sections.map(section => renderGroupSection(section, context)).join(""));
   const meta = [
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
@@ -2314,7 +2885,7 @@ function renderTurnGroup(group, context) {
     counts.failed ? `${formatNumber(counts.failed)} failed` : ""
   ].filter(Boolean);
   return `
-    <details class="rollout-turn" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}">
+    <details class="rollout-turn" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}" data-rollout-state-key="${escapeAttribute(group.id)}:body" data-rollout-lazy-turn data-rollout-lazy-key="${escapeAttribute(lazyBodyKey)}">
       <summary>
         <div class="rollout-turn-title">
           <h2>${escapeHtml(group.isPreamble ? title : `${group.index}. ${title}`)}</h2>
@@ -2322,9 +2893,7 @@ function renderTurnGroup(group, context) {
         </div>
         <span class="rollout-count">${formatNumber(group.records.length)}</span>
       </summary>
-      <div class="rollout-turn-body">
-        ${sections.map(section => renderGroupSection(section, context)).join("")}
-      </div>
+      <div class="rollout-turn-body" data-rollout-lazy-turn-body></div>
     </details>
   `;
 }
@@ -2337,6 +2906,7 @@ function createMeta(name, content) {
 }
 
 function renderDocument(records, errors, options = {}) {
+  lazyRolloutContentStore = new Map();
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
@@ -2354,7 +2924,7 @@ function renderDocument(records, errors, options = {}) {
 
   const callById = new Map();
   for (const record of records) {
-    if (record.value?.type === "response_item" && record.value?.payload?.type === "function_call" && record.value.payload.call_id) {
+    if (record.value?.type === "response_item" && isFunctionCallPayloadType(record.value?.payload?.type) && record.value.payload.call_id) {
       callById.set(record.value.payload.call_id, record.value.payload);
     }
   }
@@ -2389,34 +2959,113 @@ function renderDocument(records, errors, options = {}) {
   initRolloutControls();
 }
 
-function getSynchronizedDetails(targetId) {
-  if (!targetId) {
-    return [];
+function renderLazyCodeDetailsNode(details) {
+  const body = details.querySelector("[data-rollout-lazy-code-body]");
+  if (!body || body.childNodes.length) {
+    return;
   }
-  const escaped = CSS.escape(targetId);
-  return [...document.querySelectorAll(`[data-rollout-nav-target="${escaped}"],[data-rollout-body-id="${escaped}"]`)];
+  body.innerHTML = renderCodeBlock(lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "", details.dataset.rolloutLanguage || "plaintext");
 }
 
-function syncRolloutDetails(source) {
-  const targetId = source.dataset.rolloutNavTarget || source.dataset.rolloutBodyId;
-  for (const node of getSynchronizedDetails(targetId)) {
-    if (node !== source && node.open !== source.open) {
-      node.open = source.open;
-    }
+function renderLazyDiffFile(details) {
+  const body = details.querySelector("[data-rollout-diff-file-body]");
+  if (!body || body.childNodes.length) {
+    return;
   }
+  try {
+    const lines = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || [];
+    body.innerHTML = renderPatchFileBody(lines);
+  } catch (error) {
+    body.innerHTML = `<p class="rollout-empty">Could not render diff: ${escapeHtml(error?.message || error)}</p>`;
+  }
+}
+
+function renderLazyTurn(details) {
+  const body = details.querySelector("[data-rollout-lazy-turn-body]");
+  if (!body || body.childNodes.length) {
+    return;
+  }
+  body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
+}
+
+function renderLazySidebar(details) {
+  const body = details.querySelector("[data-rollout-lazy-sidebar-body]");
+  if (!body || body.childNodes.length) {
+    return;
+  }
+  body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
+}
+
+function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
+  const nodes = [
+    ...document.querySelectorAll("details[open][data-rollout-lazy-sidebar], details[open][data-rollout-lazy-turn], details[open][data-rollout-lazy-code], details[open][data-rollout-lazy-diff-file]")
+  ].filter(node => {
+    if (kind === "turn" && !node.matches("[data-rollout-lazy-turn]")) {
+      return false;
+    }
+    if (kind === "sidebar" && !node.matches("[data-rollout-lazy-sidebar]")) {
+      return false;
+    }
+    if (kind === "content" && (node.matches("[data-rollout-lazy-turn]") || node.matches("[data-rollout-lazy-sidebar]"))) {
+      return false;
+    }
+    const body = node.querySelector("[data-rollout-lazy-sidebar-body], [data-rollout-lazy-turn-body], [data-rollout-lazy-code-body], [data-rollout-diff-file-body]");
+    return body && !body.childNodes.length;
+  });
+  const renderNode = node => {
+    if (node.matches("[data-rollout-lazy-sidebar]")) {
+      renderLazySidebar(node);
+    } else if (node.matches("[data-rollout-lazy-turn]")) {
+      renderLazyTurn(node);
+    } else if (node.matches("[data-rollout-lazy-code]")) {
+      renderLazyCodeDetailsNode(node);
+    } else if (node.matches("[data-rollout-lazy-diff-file]")) {
+      renderLazyDiffFile(node);
+    }
+  };
+  if (!defer) {
+    nodes.forEach(renderNode);
+    return;
+  }
+  const schedule = globalThis.requestIdleCallback || (callback => setTimeout(callback, 0));
+  let index = 0;
+  const renderChunk = deadline => {
+    const startedAt = performance.now();
+    while (index < nodes.length) {
+      renderNode(nodes[index]);
+      index += 1;
+      if (deadline?.timeRemaining && deadline.timeRemaining() <= 2) {
+        break;
+      }
+      if (!deadline?.timeRemaining && performance.now() - startedAt > 12) {
+        break;
+      }
+    }
+    if (index < nodes.length) {
+      schedule(renderChunk);
+    } else {
+      highlightCodeBlocks();
+    }
+  };
+  schedule(renderChunk);
 }
 
 function setRolloutDirectoryLevel(mode) {
-  document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
-    const level = Number(node.dataset.rolloutLevel || 0);
-    if (mode === "collapse") {
-      node.open = false;
-    } else if (mode === "level-one") {
-      node.open = level === 1;
-    } else if (mode === "all") {
-      node.open = true;
-    }
-  });
+  document.documentElement.dataset.rolloutRestoringState = "true";
+  try {
+    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
+      const level = Number(node.dataset.rolloutLevel || 0);
+      if (mode === "collapse") {
+        node.open = false;
+      } else if (mode === "level-one") {
+        node.open = level === 1;
+      } else if (mode === "all") {
+        node.open = true;
+      }
+    });
+  } finally {
+    delete document.documentElement.dataset.rolloutRestoringState;
+  }
 }
 
 function initRolloutControls() {
@@ -2434,10 +3083,46 @@ function initRolloutControls() {
     root?.classList.toggle("rollout-nav-wrap");
     event.currentTarget.textContent = root?.classList.contains("rollout-nav-wrap") ? "Truncate" : "Wrap";
   });
-  document.querySelectorAll("[data-rollout-nav-target], [data-rollout-body-id]").forEach(node => {
-    node.addEventListener("toggle", () => {
-      syncRolloutDetails(node);
-    });
+  document.addEventListener("toggle", event => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.open) {
+      return;
+    }
+    if (document.documentElement?.dataset?.rolloutRestoringState === "true") {
+      return;
+    }
+    if (details.matches("[data-rollout-lazy-code]")) {
+      renderLazyCodeDetailsNode(details);
+    }
+    if (details.matches("[data-rollout-lazy-diff-file]")) {
+      renderLazyDiffFile(details);
+    }
+    if (details.matches("[data-rollout-lazy-turn]")) {
+      renderLazyTurn(details);
+    }
+    if (details.matches("[data-rollout-lazy-sidebar]")) {
+      renderLazySidebar(details);
+    }
+    highlightCodeBlocks();
+  }, true);
+  document.addEventListener("click", event => {
+    const button = event.target.closest("[data-rollout-diff-mode]");
+    if (!button) {
+      return;
+    }
+    const mode = button.dataset.rolloutDiffMode;
+    const diff = button.closest("[data-rollout-diff]");
+    if (!mode || !diff) {
+      return;
+    }
+    diff.classList.toggle("is-unified", mode === "unified");
+    diff.classList.toggle("is-split", mode === "split");
+    diff.querySelectorAll("[data-rollout-diff-mode]").forEach(item => {
+      item.setAttribute("aria-pressed", String(item === button));
+      });
+  });
+  document.addEventListener("codex-rollout-render-open-lazy", event => {
+    renderOpenLazyRolloutDetails(Boolean(event.detail?.defer), event.detail?.kind || "all");
   });
 }
 
@@ -2484,8 +3169,20 @@ function ensureCodeHighlightScript() {
   return codeHighlightScriptPromise;
 }
 
+function isCodeBlockVisibleForHighlight(node) {
+  let current = node.parentElement;
+  while (current && current !== document.body) {
+    if (current instanceof HTMLDetailsElement && !current.open) {
+      return false;
+    }
+    current = current.parentElement;
+  }
+  return true;
+}
+
 async function highlightCodeBlocks() {
-  const nodes = [...document.querySelectorAll("article.codex-rollout pre code")];
+  const nodes = [...document.querySelectorAll("article.codex-rollout pre code")]
+    .filter(isCodeBlockVisibleForHighlight);
   if (!nodes.length) {
     return;
   }
@@ -2576,11 +3273,17 @@ export async function renderLocalCodexRolloutDocument() {
     const DIRECTORY_DB_NAME = "codex-rollout-viewer";
     const DIRECTORY_STORE_NAME = "handles";
     const SESSIONS_HANDLE_KEY = "codex-sessions-directory";
+    const CURRENT_ROLLOUT_KEY = "current-rollout";
+    const CURRENT_ROLLOUT_UI_STATE_KEY = "current-rollout-ui-state";
 
     let savedDirectoryHandle = null;
     let rolloutIndex = [];
     let currentIndexLabel = "";
     let currentIndexNotice = "";
+    let currentRenderedSource = null;
+    let currentRenderedUiState = null;
+    let isRestoringRenderedUiState = false;
+    let renderedUiStatePersistenceInstalled = false;
     let indexSort = {
       key: "modified",
       direction: "desc"
@@ -2627,13 +3330,14 @@ export async function renderLocalCodexRolloutDocument() {
       return `
         <button class="standalone-file-button" type="button" data-open-sessions-directory>Open .codex/sessions</button>
         <button class="standalone-file-button" type="button" data-saved-directory ${savedDirectoryHandle ? "" : "hidden"}>Reuse saved folder</button>
+        <button class="standalone-file-button" type="button" data-open-jsonl-file ${window.showOpenFilePicker ? "" : "hidden"}>Choose JSONL</button>
         <label class="standalone-file-button">
           <input type="file" webkitdirectory multiple data-folder-input>
           Choose folder
         </label>
-        <label class="standalone-file-button">
+        <label class="standalone-file-button" data-file-input-fallback ${window.showOpenFilePicker ? "hidden" : ""}>
           <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input>
-          Choose JSONL
+          Choose JSONL file
         </label>
       `;
     }
@@ -2685,7 +3389,7 @@ export async function renderLocalCodexRolloutDocument() {
       });
     }
 
-    async function getSavedDirectoryHandle() {
+    async function getStoredValue(key) {
       let db = null;
       try {
         db = await openHandleDb();
@@ -2694,19 +3398,19 @@ export async function renderLocalCodexRolloutDocument() {
         }
         return await new Promise((resolve, reject) => {
           const transaction = db.transaction(DIRECTORY_STORE_NAME, "readonly");
-          const request = transaction.objectStore(DIRECTORY_STORE_NAME).get(SESSIONS_HANDLE_KEY);
+          const request = transaction.objectStore(DIRECTORY_STORE_NAME).get(key);
           request.addEventListener("success", () => resolve(request.result || null));
           request.addEventListener("error", () => reject(request.error));
         });
       } catch (error) {
-        console.warn("[codex-rollout-viewer] Could not read saved sessions folder", error);
+        console.warn("[codex-rollout-viewer] Could not read saved value", key, error);
         return null;
       } finally {
         db?.close();
       }
     }
 
-    async function saveDirectoryHandle(handle) {
+    async function putStoredValue(key, value) {
       let db = null;
       try {
         db = await openHandleDb();
@@ -2715,15 +3419,39 @@ export async function renderLocalCodexRolloutDocument() {
         }
         await new Promise((resolve, reject) => {
           const transaction = db.transaction(DIRECTORY_STORE_NAME, "readwrite");
-          transaction.objectStore(DIRECTORY_STORE_NAME).put(handle, SESSIONS_HANDLE_KEY);
+          transaction.objectStore(DIRECTORY_STORE_NAME).put(value, key);
           transaction.addEventListener("complete", () => resolve());
           transaction.addEventListener("error", () => reject(transaction.error));
         });
       } catch (error) {
-        console.warn("[codex-rollout-viewer] Could not save sessions folder handle", error);
+        console.warn("[codex-rollout-viewer] Could not save value", key, error);
       } finally {
         db?.close();
       }
+    }
+
+    async function getSavedDirectoryHandle() {
+      return getStoredValue(SESSIONS_HANDLE_KEY);
+    }
+
+    async function saveDirectoryHandle(handle) {
+      await putStoredValue(SESSIONS_HANDLE_KEY, handle);
+    }
+
+    async function getSavedCurrentRollout() {
+      return getStoredValue(CURRENT_ROLLOUT_KEY);
+    }
+
+    async function saveCurrentRollout(value) {
+      await putStoredValue(CURRENT_ROLLOUT_KEY, value);
+    }
+
+    async function getSavedCurrentRolloutUiState() {
+      return getStoredValue(CURRENT_ROLLOUT_UI_STATE_KEY);
+    }
+
+    async function saveCurrentRolloutUiState(value) {
+      await putStoredValue(CURRENT_ROLLOUT_UI_STATE_KEY, value);
     }
 
     async function hasReadPermission(handle) {
@@ -2768,6 +3496,7 @@ export async function renderLocalCodexRolloutDocument() {
       return {
         name: fileHandle.name,
         path: relativePath || fileHandle.name,
+        fileHandle,
         async getText() {
           return (await fileHandle.getFile()).text();
         },
@@ -2786,6 +3515,26 @@ export async function renderLocalCodexRolloutDocument() {
           yield createSourceFromFileHandle(handle, relativePath);
         }
       }
+    }
+
+    async function getFileHandleByPath(directoryHandle, relativePath) {
+      const parts = String(relativePath || "").split(/[\\/]+/).filter(Boolean);
+      if (!parts.length) {
+        return null;
+      }
+      let current = directoryHandle;
+      for (let index = 0; index < parts.length; index += 1) {
+        const name = parts[index];
+        const isLast = index === parts.length - 1;
+        try {
+          current = isLast
+            ? await current.getFileHandle(name)
+            : await current.getDirectoryHandle(name);
+        } catch {
+          return null;
+        }
+      }
+      return current;
     }
 
     function getSourcesFromFiles(files) {
@@ -3211,6 +3960,40 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
+    async function chooseJsonlFile() {
+      if (!window.showOpenFilePicker) {
+        setStatus("File picker is unavailable in this browser. Use Choose JSONL file instead.", true);
+        return;
+      }
+      try {
+        const [fileHandle] = await showOpenFilePicker({
+          id: "codex-rollout-jsonl",
+          multiple: false,
+          types: [{
+            description: "Codex rollout JSONL",
+            accept: {
+              "application/json": [".jsonl"],
+              "text/plain": [".jsonl"]
+            }
+          }]
+        });
+        if (!fileHandle || !isJsonlFileName(fileHandle.name)) {
+          setStatus("Choose a .jsonl file.", true);
+          return;
+        }
+        if (!await requestReadPermission(fileHandle)) {
+          setStatus("File permission was not granted.", true);
+          return;
+        }
+        rolloutIndex = [];
+        await renderSource(createSourceFromFileHandle(fileHandle, fileHandle.name));
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          setStatus(`Could not open JSONL file: ${error?.message || error}`, true);
+        }
+      }
+    }
+
     async function loadSavedDirectory() {
       if (!savedDirectoryHandle) {
         savedDirectoryHandle = await getSavedDirectoryHandle();
@@ -3228,7 +4011,237 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
-    async function renderSource(source) {
+    async function restoreCurrentRollout() {
+      const saved = await getSavedCurrentRollout();
+      if (!saved || saved.kind === "transient") {
+        return false;
+      }
+      if (saved.kind === "file" && saved.fileHandle) {
+        if (!await hasReadPermission(saved.fileHandle)) {
+          return false;
+        }
+        await renderSource(createSourceFromFileHandle(saved.fileHandle, saved.path || saved.name), {
+          skipRemember: true
+        });
+        return true;
+      }
+      if (saved.kind === "directory" && saved.path) {
+        if (!savedDirectoryHandle) {
+          savedDirectoryHandle = await getSavedDirectoryHandle();
+        }
+        if (!savedDirectoryHandle || !await hasReadPermission(savedDirectoryHandle)) {
+          return false;
+        }
+        const fileHandle = await getFileHandleByPath(savedDirectoryHandle, saved.path);
+        if (!fileHandle) {
+          return false;
+        }
+        await renderSource(createSourceFromFileHandle(fileHandle, saved.path), {
+          skipRemember: true
+        });
+        return true;
+      }
+      return false;
+    }
+
+    function getSourceStateId(source) {
+      return source?.path || source?.name || "";
+    }
+
+    function getDiffMode(diff) {
+      return diff.classList.contains("is-split") ? "split" : "unified";
+    }
+
+    function sanitizeRenderedDetailsState(details) {
+      return Object.fromEntries(
+        Object.entries(details || {}).filter(([key]) => !String(key).endsWith(":nav"))
+      );
+    }
+
+    function scrollToDocumentEndSoon() {
+      const scroll = () => {
+        window.scrollTo({
+          top: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+          left: 0,
+          behavior: "auto"
+        });
+      };
+      requestAnimationFrame(() => {
+        scroll();
+        requestAnimationFrame(scroll);
+        setTimeout(scroll, 250);
+      });
+    }
+
+    function captureRenderedUiState(source) {
+      const details = {};
+      document.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
+        if (node.closest(".rollout-sidebar")) {
+          return;
+        }
+        details[node.dataset.rolloutStateKey] = node.open;
+      });
+      const diffModes = {};
+      document.querySelectorAll("[data-rollout-diff][data-rollout-state-key]").forEach(node => {
+        if (node.closest(".rollout-sidebar")) {
+          return;
+        }
+        diffModes[node.dataset.rolloutStateKey] = getDiffMode(node);
+      });
+      return {
+        sourceId: getSourceStateId(source),
+        savedAt: Date.now(),
+        details,
+        diffModes
+      };
+    }
+
+    function applyDiffMode(diff, mode) {
+      const normalized = mode === "split" ? "split" : "unified";
+      diff.classList.toggle("is-unified", normalized === "unified");
+      diff.classList.toggle("is-split", normalized === "split");
+      diff.querySelectorAll("[data-rollout-diff-mode]").forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.rolloutDiffMode === normalized));
+      });
+    }
+
+    function restoreRenderedUiState(state, source) {
+      if (!state || state.sourceId !== getSourceStateId(source)) {
+        currentRenderedUiState = {
+          sourceId: getSourceStateId(source),
+          savedAt: Date.now(),
+          details: {},
+          diffModes: {}
+        };
+        return;
+      }
+      currentRenderedUiState = {
+        sourceId: state.sourceId,
+        savedAt: Date.now(),
+        details: sanitizeRenderedDetailsState(state.details),
+        diffModes: { ...(state.diffModes || {}) }
+      };
+      isRestoringRenderedUiState = true;
+      document.documentElement.dataset.rolloutRestoringState = "true";
+      const restoreDetails = () => {
+        document.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
+          if (node.closest(".rollout-sidebar")) {
+            return;
+          }
+          const key = node.dataset.rolloutStateKey;
+          if (Object.prototype.hasOwnProperty.call(currentRenderedUiState.details, key)) {
+            node.open = Boolean(currentRenderedUiState.details[key]);
+          }
+        });
+      };
+      const restoreDiffModes = () => {
+        document.querySelectorAll("[data-rollout-diff][data-rollout-state-key]").forEach(node => {
+          if (node.closest(".rollout-sidebar")) {
+            return;
+          }
+          const key = node.dataset.rolloutStateKey;
+          if (Object.prototype.hasOwnProperty.call(currentRenderedUiState.diffModes, key)) {
+            applyDiffMode(node, currentRenderedUiState.diffModes[key]);
+          }
+        });
+      };
+      try {
+        restoreDetails();
+        document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
+          detail: { defer: false, kind: "sidebar" }
+        }));
+        document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
+          detail: { defer: false, kind: "turn" }
+        }));
+        restoreDetails();
+        restoreDiffModes();
+      } finally {
+        delete document.documentElement.dataset.rolloutRestoringState;
+      }
+      setTimeout(() => {
+        isRestoringRenderedUiState = false;
+        document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
+          detail: { defer: true, kind: "content" }
+        }));
+        scrollToDocumentEndSoon();
+      }, 0);
+    }
+
+    function persistRenderedUiStateSoon(source) {
+      clearTimeout(persistRenderedUiStateSoon.timer);
+      persistRenderedUiStateSoon.timer = setTimeout(() => {
+        if (currentRenderedUiState) {
+          currentRenderedUiState.savedAt = Date.now();
+          saveCurrentRolloutUiState(currentRenderedUiState);
+        } else {
+          saveCurrentRolloutUiState(captureRenderedUiState(source));
+        }
+      }, 120);
+    }
+
+    function ensureRenderedUiStatePersistenceInstalled() {
+      if (renderedUiStatePersistenceInstalled) {
+        return;
+      }
+      renderedUiStatePersistenceInstalled = true;
+      document.addEventListener("toggle", event => {
+        const node = event.target;
+        if (isRestoringRenderedUiState || !(node instanceof HTMLDetailsElement) || !node.dataset.rolloutStateKey || node.closest(".rollout-sidebar") || !currentRenderedSource) {
+          return;
+        }
+        currentRenderedUiState ||= {
+          sourceId: getSourceStateId(currentRenderedSource),
+          savedAt: Date.now(),
+          details: {},
+          diffModes: {}
+        };
+        currentRenderedUiState.details[node.dataset.rolloutStateKey] = node.open;
+        persistRenderedUiStateSoon(currentRenderedSource);
+      }, true);
+      document.addEventListener("click", event => {
+        if (isRestoringRenderedUiState || !currentRenderedSource) {
+          return;
+        }
+        const button = event.target.closest("[data-rollout-diff-mode]");
+        if (!button) {
+          return;
+        }
+        const diff = button.closest("[data-rollout-diff][data-rollout-state-key]");
+        if (!diff || diff.closest(".rollout-sidebar")) {
+          return;
+        }
+        currentRenderedUiState ||= {
+          sourceId: getSourceStateId(currentRenderedSource),
+          savedAt: Date.now(),
+          details: {},
+          diffModes: {}
+        };
+        currentRenderedUiState.diffModes[diff.dataset.rolloutStateKey] = getDiffMode(diff);
+        persistRenderedUiStateSoon(currentRenderedSource);
+      });
+    }
+
+    async function rememberRenderedSource(source) {
+      if (source.fileHandle) {
+        await saveCurrentRollout({
+          kind: "file",
+          name: source.name,
+          path: source.path || source.name,
+          fileHandle: source.fileHandle
+        });
+      } else {
+        await saveCurrentRollout({
+          kind: "transient",
+          name: source.name,
+          path: source.path || source.name
+        });
+      }
+    }
+
+    async function renderSource(source, options = {}) {
+      clearTimeout(persistRenderedUiStateSoon.timer);
+      currentRenderedSource = null;
+      currentRenderedUiState = null;
       setStatus(`Reading ${source.name}...`);
       let text = "";
       try {
@@ -3246,7 +4259,14 @@ export async function renderLocalCodexRolloutDocument() {
         setStatus(`${source.name} does not look like a Codex rollout JSONL file.`, true);
         return;
       }
+      if (!options.skipRemember) {
+        await rememberRenderedSource(source);
+      }
       installRenderToolbar(source.name);
+      restoreRenderedUiState(await getSavedCurrentRolloutUiState(), source);
+      currentRenderedSource = source;
+      ensureRenderedUiStatePersistenceInstalled();
+      scrollToDocumentEndSoon();
     }
 
     async function renderIndexedRollout(id) {
@@ -3331,6 +4351,10 @@ export async function renderLocalCodexRolloutDocument() {
         chooseSessionsDirectory();
         return;
       }
+      if (event.target.closest("[data-open-jsonl-file]")) {
+        chooseJsonlFile();
+        return;
+      }
       if (event.target.closest("[data-saved-directory]")) {
         if (savedDirectoryHandle) {
           loadDirectoryHandle(savedDirectoryHandle, `${savedDirectoryHandle.name || ".codex/sessions"} (saved)`);
@@ -3338,11 +4362,22 @@ export async function renderLocalCodexRolloutDocument() {
         return;
       }
       if (event.target.closest("[data-back-index]")) {
+        if (currentRenderedSource) {
+          saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+          currentRenderedSource = null;
+          currentRenderedUiState = null;
+        }
         if (rolloutIndex.length) {
           renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
         } else {
           renderHome();
         }
+      }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (currentRenderedSource) {
+        saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
       }
     });
 
@@ -3393,7 +4428,19 @@ export async function renderLocalCodexRolloutDocument() {
     });
 
     updateDefaultPathHint();
-    loadSavedDirectory();
+    (async () => {
+      if (!window.showOpenFilePicker) {
+        document.querySelectorAll("[data-open-jsonl-file]").forEach(button => {
+          button.hidden = true;
+        });
+        document.querySelectorAll("[data-file-input-fallback]").forEach(label => {
+          label.hidden = false;
+        });
+      }
+      if (!await restoreCurrentRollout()) {
+        await loadSavedDirectory();
+      }
+    })();
   </script>
 </body>
 </html>
