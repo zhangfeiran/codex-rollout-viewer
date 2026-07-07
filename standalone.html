@@ -3249,6 +3249,21 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   };
 }
 
+export async function renderCodexRolloutRecords(parsed, options = {}) {
+  ensureDocumentStructure();
+  const records = createRenderableRecords(parsed?.records || []);
+  renderDocument(records, parsed?.errors || [], {
+    fileName: options.fileName,
+    sourceUrl: options.sourceUrl || options.fileName || location.href
+  });
+  await highlightCodeBlocks();
+  return {
+    rendered: true,
+    records: records.length,
+    errors: parsed?.errors?.length || 0
+  };
+}
+
 export async function renderLocalCodexRolloutDocument() {
   if (!isLocalCodexRolloutJsonlUrl()) {
     return false;
@@ -3282,6 +3297,8 @@ export async function renderLocalCodexRolloutDocument() {
     const CURRENT_VIEW_KEY = "current-view";
     const INDEX_CACHE_KEY = "rollout-index-cache-v1";
     const INDEX_CACHE_VERSION = 1;
+    const CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
+    const RENDER_CACHE_VERSION = 1;
 
     let savedDirectoryHandle = null;
     let rolloutIndex = [];
@@ -3500,6 +3517,23 @@ export async function renderLocalCodexRolloutDocument() {
       });
     }
 
+    async function getSavedCurrentRolloutRenderCache() {
+      const cache = await getStoredValue(CURRENT_ROLLOUT_RENDER_CACHE_KEY);
+      return cache?.version === RENDER_CACHE_VERSION ? cache : null;
+    }
+
+    async function saveCurrentRolloutRenderCache(cache) {
+      try {
+        await putStoredValue(CURRENT_ROLLOUT_RENDER_CACHE_KEY, {
+          ...cache,
+          version: RENDER_CACHE_VERSION,
+          savedAt: Date.now()
+        });
+      } catch (error) {
+        console.warn("[codex-rollout-viewer] Could not save rollout render cache", error);
+      }
+    }
+
     async function hasReadPermission(handle) {
       if (!handle?.queryPermission) {
         return true;
@@ -3541,7 +3575,10 @@ export async function renderLocalCodexRolloutDocument() {
             size: file.size
           };
         },
-        getText: () => file.text()
+        getText: () => file.text(),
+        getTextSlice(start, end) {
+          return file.slice(start, end).text();
+        }
       };
     }
 
@@ -3552,6 +3589,9 @@ export async function renderLocalCodexRolloutDocument() {
         fileHandle,
         async getText() {
           return (await fileHandle.getFile()).text();
+        },
+        async getTextSlice(start, end) {
+          return (await fileHandle.getFile()).slice(start, end).text();
         },
         async getMetadata() {
           const file = await fileHandle.getFile();
@@ -4205,6 +4245,150 @@ export async function renderLocalCodexRolloutDocument() {
       return source?.path || source?.name || "";
     }
 
+    function splitJsonlCompleteLines(text) {
+      const normalized = String(text ?? "").replace(/\r\n?/g, "\n");
+      const lines = normalized.split("\n");
+      const tail = lines.pop() || "";
+      return {
+        lines,
+        tail
+      };
+    }
+
+    function parseJsonlLines(lines, startLine = 1) {
+      const records = [];
+      const errors = [];
+      lines.forEach((line, index) => {
+        const lineNumber = startLine + index;
+        if (!String(line).trim()) {
+          return;
+        }
+        try {
+          records.push({
+            line: lineNumber,
+            value: JSON.parse(line)
+          });
+        } catch (error) {
+          errors.push({
+            line: lineNumber,
+            message: error?.message || String(error),
+            text: String(line).slice(0, 500)
+          });
+        }
+      });
+      return {
+        records,
+        errors,
+        lineCount: startLine + lines.length - 1
+      };
+    }
+
+    function parseCompleteJsonlText(text) {
+      const normalized = String(text ?? "").replace(/\r\n?/g, "\n");
+      const split = splitJsonlCompleteLines(normalized);
+      const parsed = parseJsonlLines(split.lines, 1);
+      let tail = split.tail;
+      if (tail.trim()) {
+        try {
+          parsed.records.push({
+            line: parsed.lineCount + 1,
+            value: JSON.parse(tail)
+          });
+          parsed.lineCount += 1;
+          tail = "";
+        } catch {
+          // Keep a possibly in-progress final line out of permanent parse errors.
+        }
+      }
+      return {
+        records: parsed.records,
+        errors: parsed.errors,
+        lineCount: parsed.lineCount,
+        tail
+      };
+    }
+
+    async function readSourceTextSlice(source, start, end) {
+      if (typeof source.getTextSlice === "function") {
+        return source.getTextSlice(start, end);
+      }
+      const text = await source.getText();
+      return text.slice(start, end);
+    }
+
+    async function readRolloutParsedIncrementally(source, metadata) {
+      const sourceId = getSourceStateId(source);
+      const cached = await getSavedCurrentRolloutRenderCache();
+      if (
+        cached
+        && cached.sourceId === sourceId
+        && Array.isArray(cached.records)
+        && Array.isArray(cached.errors)
+        && Number.isFinite(cached.size)
+        && Number.isFinite(metadata.size)
+        && metadata.size >= cached.size
+      ) {
+        if (metadata.size === cached.size && cached.lastModified === metadata.lastModified) {
+          return {
+            parsed: {
+              records: cached.records,
+              errors: cached.errors
+            },
+            cache: cached,
+            incremental: true,
+            appendedBytes: 0
+          };
+        }
+        let appended = await readSourceTextSlice(source, cached.size, metadata.size);
+        if (!cached.tail && appended.startsWith("\r\n")) {
+          appended = appended.slice(2);
+        } else if (!cached.tail && appended.startsWith("\n")) {
+          appended = appended.slice(1);
+        }
+        const combined = `${cached.tail || ""}${appended}`;
+        const split = splitJsonlCompleteLines(combined);
+        const appendedParsed = parseJsonlLines(split.lines, (cached.lineCount || 0) + 1);
+        const nextCache = {
+          sourceId,
+          size: metadata.size,
+          lastModified: metadata.lastModified,
+          lineCount: appendedParsed.lineCount,
+          tail: split.tail,
+          records: [...cached.records, ...appendedParsed.records],
+          errors: [...cached.errors, ...appendedParsed.errors]
+        };
+        return {
+          parsed: {
+            records: nextCache.records,
+            errors: nextCache.errors
+          },
+          cache: nextCache,
+          incremental: true,
+          appendedBytes: metadata.size - cached.size
+        };
+      }
+
+      const text = await source.getText();
+      const parsed = parseCompleteJsonlText(text);
+      return {
+        parsed: {
+          records: parsed.records,
+          errors: parsed.errors
+        },
+        cache: {
+          sourceId,
+          size: metadata.size,
+          lastModified: metadata.lastModified,
+          lineCount: parsed.lineCount,
+          tail: parsed.tail,
+          records: parsed.records,
+          errors: parsed.errors
+        },
+        incremental: false,
+        appendedBytes: metadata.size ?? null
+      };
+    }
+
     function getDiffMode(diff) {
       return diff.classList.contains("is-split") ? "split" : "unified";
     }
@@ -4400,22 +4584,25 @@ export async function renderLocalCodexRolloutDocument() {
       currentRenderedSource = null;
       currentRenderedUiState = null;
       setStatus(`Reading ${source.name}...`);
-      let text = "";
+      let metadata = null;
+      let parsedResult = null;
       try {
-        text = await source.getText();
+        metadata = await getSourceMetadata(source);
+        parsedResult = await readRolloutParsedIncrementally(source, metadata);
       } catch (error) {
         setStatus(`Could not read ${source.name}: ${error?.message || error}`, true);
         return;
       }
-      const result = await renderCodexRolloutJsonlText(text, {
-        fileName: source.name,
-        sourceUrl: source.path || source.name
-      });
-      if (!result.rendered) {
+      if (!isCodexRolloutRecords(parsedResult.parsed.records)) {
         renderHome();
         setStatus(`${source.name} does not look like a Codex rollout JSONL file.`, true);
         return;
       }
+      const result = await renderCodexRolloutRecords(parsedResult.parsed, {
+        fileName: source.name,
+        sourceUrl: source.path || source.name
+      });
+      await saveCurrentRolloutRenderCache(parsedResult.cache);
       if (!options.skipRemember) {
         await rememberRenderedSource(source);
       }

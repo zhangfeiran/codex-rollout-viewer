@@ -2896,6 +2896,21 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   };
 }
 
+export async function renderCodexRolloutRecords(parsed, options = {}) {
+  ensureDocumentStructure();
+  const records = createRenderableRecords(parsed?.records || []);
+  renderDocument(records, parsed?.errors || [], {
+    fileName: options.fileName,
+    sourceUrl: options.sourceUrl || options.fileName || location.href
+  });
+  await highlightCodeBlocks();
+  return {
+    rendered: true,
+    records: records.length,
+    errors: parsed?.errors?.length || 0
+  };
+}
+
 export async function renderLocalCodexRolloutDocument() {
   if (!isLocalCodexRolloutJsonlUrl()) {
     return false;
