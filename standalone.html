@@ -3275,6 +3275,9 @@ export async function renderLocalCodexRolloutDocument() {
     const SESSIONS_HANDLE_KEY = "codex-sessions-directory";
     const CURRENT_ROLLOUT_KEY = "current-rollout";
     const CURRENT_ROLLOUT_UI_STATE_KEY = "current-rollout-ui-state";
+    const CURRENT_VIEW_KEY = "current-view";
+    const INDEX_CACHE_KEY = "rollout-index-cache-v1";
+    const INDEX_CACHE_VERSION = 1;
 
     let savedDirectoryHandle = null;
     let rolloutIndex = [];
@@ -3357,6 +3360,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function renderHome() {
+      saveCurrentView({ kind: "home", savedAt: Date.now() });
       installStandaloneHead();
       document.body.className = "";
       document.body.innerHTML = `
@@ -3454,6 +3458,44 @@ export async function renderLocalCodexRolloutDocument() {
       await putStoredValue(CURRENT_ROLLOUT_UI_STATE_KEY, value);
     }
 
+    function getLocalCurrentView() {
+      try {
+        return JSON.parse(localStorage.getItem(CURRENT_VIEW_KEY) || "null");
+      } catch {
+        return null;
+      }
+    }
+
+    async function getSavedCurrentView() {
+      return getLocalCurrentView() || getStoredValue(CURRENT_VIEW_KEY);
+    }
+
+    async function saveCurrentView(value) {
+      try {
+        localStorage.setItem(CURRENT_VIEW_KEY, JSON.stringify(value));
+      } catch {}
+      await putStoredValue(CURRENT_VIEW_KEY, value);
+    }
+
+    async function getSavedIndexCache() {
+      const cache = await getStoredValue(INDEX_CACHE_KEY);
+      if (!cache || cache.version !== INDEX_CACHE_VERSION || !cache.items || typeof cache.items != "object") {
+        return {
+          version: INDEX_CACHE_VERSION,
+          items: {}
+        };
+      }
+      return cache;
+    }
+
+    async function saveIndexCache(cache) {
+      await putStoredValue(INDEX_CACHE_KEY, {
+        version: INDEX_CACHE_VERSION,
+        savedAt: Date.now(),
+        items: cache.items || {}
+      });
+    }
+
     async function hasReadPermission(handle) {
       if (!handle?.queryPermission) {
         return true;
@@ -3488,6 +3530,13 @@ export async function renderLocalCodexRolloutDocument() {
         name: file.name,
         path: relativePath || file.name,
         lastModified: file.lastModified,
+        size: file.size,
+        getMetadata() {
+          return {
+            lastModified: file.lastModified,
+            size: file.size
+          };
+        },
         getText: () => file.text()
       };
     }
@@ -3499,6 +3548,13 @@ export async function renderLocalCodexRolloutDocument() {
         fileHandle,
         async getText() {
           return (await fileHandle.getFile()).text();
+        },
+        async getMetadata() {
+          const file = await fileHandle.getFile();
+          return {
+            lastModified: file.lastModified,
+            size: file.size
+          };
         },
         async getLastModified() {
           return (await fileHandle.getFile()).lastModified;
@@ -3598,6 +3654,68 @@ export async function renderLocalCodexRolloutDocument() {
       return source.lastModified || null;
     }
 
+    async function getSourceMetadata(source) {
+      if (typeof source.getMetadata === "function") {
+        return await source.getMetadata();
+      }
+      return {
+        lastModified: await getSourceLastModified(source),
+        size: source.size ?? null
+      };
+    }
+
+    function getIndexCacheKey(source) {
+      return source.path || source.name || "";
+    }
+
+    function getIndexCacheScope(label) {
+      return String(label || "default");
+    }
+
+    function getScopedIndexCache(cache, scope) {
+      return cache.items?.[scope] && typeof cache.items[scope] == "object"
+        ? cache.items[scope]
+        : {};
+    }
+
+    function isIndexCacheHit(cached, metadata) {
+      return cached
+        && cached.cacheVersion === INDEX_CACHE_VERSION
+        && cached.lastModified === metadata.lastModified
+        && cached.size === metadata.size;
+    }
+
+    function attachSourceToIndexItem(item, source, index) {
+      return {
+        ...item,
+        id: `rollout-${index}`,
+        source,
+        name: source.name,
+        path: source.path || source.name,
+        folder: getFolderFromPath(source.path || source.name)
+      };
+    }
+
+    function createCachedIndexItem(item, metadata) {
+      const { source, id, ...rest } = item;
+      return {
+        ...rest,
+        isRollout: true,
+        cacheVersion: INDEX_CACHE_VERSION,
+        lastModified: metadata.lastModified,
+        size: metadata.size
+      };
+    }
+
+    function createCachedSkippedIndexItem(metadata) {
+      return {
+        isRollout: false,
+        cacheVersion: INDEX_CACHE_VERSION,
+        lastModified: metadata.lastModified,
+        size: metadata.size
+      };
+    }
+
     function getRolloutTimestamp(records, session, fallback) {
       const sessionTime = Date.parse(session?.timestamp || "");
       if (!Number.isNaN(sessionTime)) {
@@ -3653,7 +3771,7 @@ export async function renderLocalCodexRolloutDocument() {
       return getFirstUserTitle(records, fileName);
     }
 
-    async function createRolloutIndexItem(source, index) {
+    async function createRolloutIndexItem(source, index, metadata = null) {
       const text = await source.getText();
       const parsed = parseCodexRolloutJsonl(text);
       if (!isCodexRolloutRecords(parsed.records)) {
@@ -3662,7 +3780,8 @@ export async function renderLocalCodexRolloutDocument() {
       const records = createRenderableRecords(parsed.records);
       const session = getSessionMeta(parsed.records);
       const stats = summarizeRecords(records, parsed.errors);
-      const lastModified = await getSourceLastModified(source);
+      const sourceMetadata = metadata || await getSourceMetadata(source);
+      const lastModified = sourceMetadata.lastModified;
       const createdAt = getRolloutTimestamp(parsed.records, session, null);
       const modifiedAt = Number.isFinite(lastModified) ? lastModified : null;
       return {
@@ -3678,7 +3797,8 @@ export async function renderLocalCodexRolloutDocument() {
         modifiedAt,
         title: getRolloutTitle(records, source.name),
         stats,
-        parseErrors: parsed.errors.length
+        parseErrors: parsed.errors.length,
+        size: sourceMetadata.size ?? null
       };
     }
 
@@ -3863,6 +3983,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function renderRolloutIndex(items, label, notice = "") {
+      saveCurrentView({ kind: "index", savedAt: Date.now() });
       rolloutIndex = items;
       currentIndexLabel = label;
       currentIndexNotice = notice;
@@ -3905,29 +4026,61 @@ export async function renderLocalCodexRolloutDocument() {
 
     async function loadRolloutSources(sources, label) {
       const items = [];
+      const cache = await getSavedIndexCache();
+      const cacheScope = getIndexCacheScope(label);
+      const scopedCache = getScopedIndexCache(cache, cacheScope);
+      const nextCache = {
+        version: INDEX_CACHE_VERSION,
+        items: {
+          ...(cache.items || {}),
+          [cacheScope]: {}
+        }
+      };
       let scanned = 0;
+      let reused = 0;
+      let parsed = 0;
       let skipped = 0;
       setStatus(`Scanning ${label}...`);
       for await (const source of sources) {
         scanned += 1;
         if (scanned % 20 === 0) {
-          setStatus(`Scanning ${label}: ${formatNumber(scanned)} JSONL files...`);
+          setStatus(`Scanning ${label}: ${formatNumber(scanned)} files, ${formatNumber(reused)} cached, ${formatNumber(parsed)} parsed...`);
         }
         try {
-          const item = await createRolloutIndexItem(source, scanned);
+          const metadata = await getSourceMetadata(source);
+          const cacheKey = getIndexCacheKey(source);
+          const cached = scopedCache[cacheKey];
+          let item = null;
+          if (isIndexCacheHit(cached, metadata)) {
+            reused += 1;
+            if (cached.isRollout === false) {
+              skipped += 1;
+              nextCache.items[cacheScope][cacheKey] = cached;
+              continue;
+            }
+            item = attachSourceToIndexItem(cached, source, scanned);
+          } else {
+            item = await createRolloutIndexItem(source, scanned, metadata);
+            if (item) {
+              parsed += 1;
+            }
+          }
           if (item) {
             items.push(item);
+            nextCache.items[cacheScope][cacheKey] = createCachedIndexItem(item, metadata);
           } else {
             skipped += 1;
+            nextCache.items[cacheScope][cacheKey] = createCachedSkippedIndexItem(metadata);
           }
         } catch (error) {
           skipped += 1;
           console.warn("[codex-rollout-viewer] Could not index rollout", source.path || source.name, error);
         }
       }
+      await saveIndexCache(nextCache);
       const notice = skipped
-        ? `Indexed ${formatNumber(items.length)} rollouts; skipped ${formatNumber(skipped)} non-rollout or unreadable JSONL files.`
-        : `Indexed ${formatNumber(items.length)} rollouts.`;
+        ? `Indexed ${formatNumber(items.length)} rollouts; reused ${formatNumber(reused)} cached; parsed ${formatNumber(parsed)} updated; skipped ${formatNumber(skipped)} non-rollout or unreadable JSONL files.`
+        : `Indexed ${formatNumber(items.length)} rollouts; reused ${formatNumber(reused)} cached; parsed ${formatNumber(parsed)} updated.`;
       indexCwdFilter = "";
       renderRolloutIndex(items, label, notice);
     }
@@ -4005,7 +4158,7 @@ export async function renderLocalCodexRolloutDocument() {
         return;
       }
       if (await hasReadPermission(savedDirectoryHandle)) {
-        await loadDirectoryHandle(savedDirectoryHandle, `${savedDirectoryHandle.name || ".codex/sessions"} (saved)`);
+        await loadDirectoryHandle(savedDirectoryHandle, savedDirectoryHandle.name || ".codex/sessions");
       } else {
         setStatus("Saved sessions folder found. Reuse it to grant access again.");
       }
@@ -4262,6 +4415,11 @@ export async function renderLocalCodexRolloutDocument() {
       if (!options.skipRemember) {
         await rememberRenderedSource(source);
       }
+      await saveCurrentView({
+        kind: "rollout",
+        sourceId: getSourceStateId(source),
+        savedAt: Date.now()
+      });
       installRenderToolbar(source.name);
       restoreRenderedUiState(await getSavedCurrentRolloutUiState(), source);
       currentRenderedSource = source;
@@ -4336,7 +4494,21 @@ export async function renderLocalCodexRolloutDocument() {
       document.body.prepend(toolbar);
     }
 
-    document.addEventListener("click", event => {
+    async function returnToIndex() {
+      if (currentRenderedSource) {
+        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+        currentRenderedSource = null;
+        currentRenderedUiState = null;
+      }
+      if (rolloutIndex.length) {
+        renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
+        return;
+      }
+      renderHome();
+      await loadSavedDirectory();
+    }
+
+    document.addEventListener("click", async event => {
       const rolloutButton = event.target.closest("[data-rollout-id]");
       if (rolloutButton) {
         renderIndexedRollout(rolloutButton.dataset.rolloutId);
@@ -4357,21 +4529,12 @@ export async function renderLocalCodexRolloutDocument() {
       }
       if (event.target.closest("[data-saved-directory]")) {
         if (savedDirectoryHandle) {
-          loadDirectoryHandle(savedDirectoryHandle, `${savedDirectoryHandle.name || ".codex/sessions"} (saved)`);
+          loadDirectoryHandle(savedDirectoryHandle, savedDirectoryHandle.name || ".codex/sessions");
         }
         return;
       }
       if (event.target.closest("[data-back-index]")) {
-        if (currentRenderedSource) {
-          saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
-          currentRenderedSource = null;
-          currentRenderedUiState = null;
-        }
-        if (rolloutIndex.length) {
-          renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
-        } else {
-          renderHome();
-        }
+        await returnToIndex();
       }
     });
 
@@ -4437,7 +4600,16 @@ export async function renderLocalCodexRolloutDocument() {
           label.hidden = false;
         });
       }
-      if (!await restoreCurrentRollout()) {
+      const savedView = await getSavedCurrentView();
+      if (savedView?.kind === "rollout" && await restoreCurrentRollout()) {
+        return;
+      }
+      if (savedView?.kind === "home") {
+        renderHome();
+        await loadSavedDirectory();
+        return;
+      }
+      if (savedView?.kind === "index" || !savedView) {
         await loadSavedDirectory();
       }
     })();
