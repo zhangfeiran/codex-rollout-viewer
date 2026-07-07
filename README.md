@@ -23,3 +23,15 @@ npm run check
 ```
 
 There is no build step; the files in this directory are loaded directly by Chrome.
+
+## GitHub Pages
+
+The public Pages build is generated from `standalone.html`:
+
+```bash
+npm run export:pages
+```
+
+This writes `pages/index.html` and the local Highlight.js asset. The GitHub Actions workflow in `.github/workflows/pages.yml` runs the same export step and deploys the `pages/` directory to GitHub Pages when `main` is pushed.
+
+In the GitHub repository settings, configure Pages to use **GitHub Actions** as the source. The deployed site runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded.

@@ -380,6 +380,10 @@ body.codex-rollout-page {
 
 .rollout-assistant-title {
   min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
   overflow-wrap: anywhere;
   color: var(--wh-rollout-fg);
   font-size: 13px;
