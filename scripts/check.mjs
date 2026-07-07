@@ -4,7 +4,6 @@ import path from "node:path";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
-  "content-loader.js",
   "rollout-renderer.js"
 ].map(file => path.resolve(projectDir, file));
 
@@ -35,31 +34,31 @@ async function checkFile(file) {
   });
 }
 
-async function checkStandaloneHtml() {
-  const file = path.resolve(projectDir, "standalone.html");
+async function checkLocalHtml() {
+  const file = path.resolve(projectDir, "codex-rollout-viewer.html");
   const html = await readFile(file, "utf8");
   const begin = "/* BEGIN embedded rollout-renderer.js */";
   const end = "/* END embedded rollout-renderer.js */";
   const beginIndex = html.indexOf(begin);
   const endIndex = html.indexOf(end);
   if (beginIndex < 0 || endIndex < 0 || endIndex <= beginIndex) {
-    throw new Error("standalone.html must embed rollout-renderer.js between sync markers");
+    throw new Error("codex-rollout-viewer.html must embed rollout-renderer.js between sync markers");
   }
 
   const embeddedRenderer = html.slice(beginIndex + begin.length, endIndex).trim();
   const renderer = (await readFile(path.resolve(projectDir, "rollout-renderer.js"), "utf8")).replace(/\r\n/g, "\n").trim();
   if (/<\/script/i.test(renderer)) {
-    throw new Error("rollout-renderer.js contains a closing script tag and cannot be embedded in standalone.html");
+    throw new Error("rollout-renderer.js contains a closing script tag and cannot be embedded in codex-rollout-viewer.html");
   }
   if (embeddedRenderer.replace(/\r\n/g, "\n") !== renderer) {
-    throw new Error("standalone.html embedded rollout renderer is out of sync with rollout-renderer.js");
+    throw new Error("codex-rollout-viewer.html embedded rollout renderer is out of sync with rollout-renderer.js");
   }
 
   const bootScript = html.slice(endIndex + end.length, html.indexOf("</script>", endIndex));
   try {
     new Function(bootScript);
   } catch (error) {
-    throw new Error(`standalone.html boot script has invalid syntax: ${error.message}`);
+    throw new Error(`codex-rollout-viewer.html boot script has invalid syntax: ${error.message}`);
   }
 }
 
@@ -69,11 +68,6 @@ for (const file of files) {
   await checkFile(file);
 }
 
-await checkStandaloneHtml();
+await checkLocalHtml();
 
-const manifest = JSON.parse(await readFile(path.resolve(projectDir, "manifest.json"), "utf8"));
-if (manifest.manifest_version !== 3) {
-  throw new Error("manifest.json must be MV3");
-}
-
-console.log(`Checked ${files.length} JavaScript files and standalone.html.`);
+console.log(`Checked ${files.length} JavaScript files and codex-rollout-viewer.html.`);
