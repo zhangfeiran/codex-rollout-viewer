@@ -8,7 +8,7 @@ Use the hosted GitHub Pages version:
 
 https://zhangfeiran.github.io/codex-rollout-viewer/
 
-Open the page in Chrome, then use `Open .codex/sessions`, `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded.
+Open the page in Chrome, then use `Add sessions folder` to remember one or more `.codex/sessions` folders, choose a remembered folder from `Sessions folders`, use `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded.
 
 ## Local HTML
 

@@ -175,6 +175,40 @@
       gap: 8px;
     }
 
+    .standalone-folder-table {
+      min-width: 760px;
+    }
+
+    .standalone-cell-folder-name {
+      min-width: 260px;
+      max-width: 520px;
+    }
+
+    .standalone-folder-name {
+      display: block;
+      color: var(--standalone-fg);
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .standalone-folder-subtitle {
+      margin: 0;
+      color: var(--standalone-subtle);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .standalone-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .standalone-file-button.is-danger {
+      color: #ffb1b1;
+    }
+
     .standalone-index-controls {
       display: flex;
       flex-wrap: wrap;
@@ -331,10 +365,10 @@
     <section class="standalone-drop-zone" data-drop-zone>
       <p class="standalone-eyebrow">Codex Rollout Viewer</p>
       <h1>Open Codex rollout sessions</h1>
-      <p>Select <span data-default-sessions-path>.codex/sessions</span>, choose a folder, or drop JSONL files.</p>
+      <p>Add or choose remembered sessions folders, choose a folder, or drop JSONL files.</p>
       <div class="standalone-actions">
-        <button class="standalone-file-button" type="button" data-open-sessions-directory>Open .codex/sessions</button>
-        <button class="standalone-file-button" type="button" data-saved-directory hidden>Reuse saved folder</button>
+        <button class="standalone-file-button" type="button" data-open-sessions-directory>Add sessions folder</button>
+        <button class="standalone-file-button" type="button" data-saved-directories hidden>Sessions folders</button>
         <button class="standalone-file-button" type="button" data-open-jsonl-file>Choose JSONL</button>
         <label class="standalone-file-button">
           <input type="file" webkitdirectory multiple data-folder-input>
@@ -3292,6 +3326,7 @@ export async function renderLocalCodexRolloutDocument() {
     const DIRECTORY_DB_NAME = "codex-rollout-viewer";
     const DIRECTORY_STORE_NAME = "handles";
     const SESSIONS_HANDLE_KEY = "codex-sessions-directory";
+    const SESSIONS_HANDLES_KEY = "codex-sessions-directories-v1";
     const CURRENT_ROLLOUT_KEY = "current-rollout";
     const CURRENT_ROLLOUT_UI_STATE_KEY = "current-rollout-ui-state";
     const CURRENT_VIEW_KEY = "current-view";
@@ -3300,7 +3335,8 @@ export async function renderLocalCodexRolloutDocument() {
     const CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
     const RENDER_CACHE_VERSION = 1;
 
-    let savedDirectoryHandle = null;
+    let savedDirectoryEntries = [];
+    let selectedDirectoryEntry = null;
     let rolloutIndex = [];
     let currentIndexLabel = "";
     let currentIndexNotice = "";
@@ -3352,8 +3388,8 @@ export async function renderLocalCodexRolloutDocument() {
 
     function renderActionControls() {
       return `
-        <button class="standalone-file-button" type="button" data-open-sessions-directory>Open .codex/sessions</button>
-        <button class="standalone-file-button" type="button" data-saved-directory ${savedDirectoryHandle ? "" : "hidden"}>Reuse saved folder</button>
+        <button class="standalone-file-button" type="button" data-open-sessions-directory>Add sessions folder</button>
+        <button class="standalone-file-button" type="button" data-saved-directories ${savedDirectoryEntries.length ? "" : "hidden"}>${savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders"}</button>
         <button class="standalone-file-button" type="button" data-open-jsonl-file ${window.showOpenFilePicker ? "" : "hidden"}>Choose JSONL</button>
         <label class="standalone-file-button">
           <input type="file" webkitdirectory multiple data-folder-input>
@@ -3389,7 +3425,7 @@ export async function renderLocalCodexRolloutDocument() {
           <section class="standalone-drop-zone" data-drop-zone>
             <p class="standalone-eyebrow">Codex Rollout Viewer</p>
             <h1>Open Codex rollout sessions</h1>
-            <p>Select <span data-default-sessions-path>.codex/sessions</span>, choose a folder, or drop JSONL files.</p>
+            <p>Add or choose remembered sessions folders, choose a folder, or drop JSONL files.</p>
             <div class="standalone-actions">
               ${renderActionControls()}
             </div>
@@ -3398,6 +3434,72 @@ export async function renderLocalCodexRolloutDocument() {
         </main>
       `;
       updateDefaultPathHint();
+      updateSavedDirectoryButtons();
+    }
+
+    async function renderDirectorySelectionPage(notice = "") {
+      savedDirectoryEntries = await getSavedDirectoryEntries();
+      saveCurrentView({ kind: "folders", savedAt: Date.now() });
+      installStandaloneHead("Codex Sessions Folders");
+      document.body.className = "";
+      const rows = await Promise.all(savedDirectoryEntries.map(async entry => ({
+        ...entry,
+        permissionLabel: await hasReadPermission(entry.handle) ? "Ready" : "Needs permission"
+      })));
+      document.body.innerHTML = `
+        <main class="standalone-index-shell">
+          <header class="standalone-index-header">
+            <div>
+              <p class="standalone-eyebrow">Codex Rollout Viewer</p>
+              <h1>Sessions folders</h1>
+            </div>
+            <p class="standalone-index-meta">
+              <span class="standalone-chip">${formatNumber(savedDirectoryEntries.length)} remembered</span>
+              <span class="standalone-chip">${escapeHtml(getDefaultSessionsPathHint())}</span>
+            </p>
+            <div class="standalone-index-actions">
+              ${renderActionControls()}
+            </div>
+            <p class="standalone-status" data-status>${escapeHtml(notice || "Choose a remembered sessions folder, or add another one.")}</p>
+          </header>
+          ${rows.length ? `
+            <section class="standalone-table-wrap" aria-label="Remembered sessions folders">
+              <table class="standalone-rollout-table standalone-folder-table">
+                <thead>
+                  <tr>
+                    <th class="standalone-cell-folder-name">Folder</th>
+                    <th>Status</th>
+                    <th class="standalone-cell-date">Last opened</th>
+                    <th class="standalone-cell-date">Added</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map(entry => `
+                    <tr>
+                      <td class="standalone-cell-folder-name">
+                        <span class="standalone-folder-name">${escapeHtml(getDirectoryEntryLabel(entry))}</span>
+                        <p class="standalone-folder-subtitle">${escapeHtml(entry.name || "sessions")}</p>
+                      </td>
+                      <td><span class="standalone-chip">${escapeHtml(entry.permissionLabel)}</span></td>
+                      <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.usedAt))}</td>
+                      <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.addedAt))}</td>
+                      <td>
+                        <div class="standalone-row-actions">
+                          <button class="standalone-file-button" type="button" data-open-directory-id="${escapeAttribute(entry.id)}">Open</button>
+                          <button class="standalone-file-button is-danger" type="button" data-forget-directory-id="${escapeAttribute(entry.id)}">Forget</button>
+                        </div>
+                      </td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </section>
+          ` : `<p class="standalone-empty">No remembered sessions folders yet.</p>`}
+        </main>
+      `;
+      updateDefaultPathHint();
+      updateSavedDirectoryButtons();
     }
 
     function openHandleDb() {
@@ -3455,12 +3557,161 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
-    async function getSavedDirectoryHandle() {
-      return getStoredValue(SESSIONS_HANDLE_KEY);
+    function createDirectoryEntryId() {
+      if (window.crypto?.randomUUID) {
+        return `dir-${window.crypto.randomUUID()}`;
+      }
+      return `dir-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     }
 
-    async function saveDirectoryHandle(handle) {
-      await putStoredValue(SESSIONS_HANDLE_KEY, handle);
+    function getDirectoryEntryLabel(entry) {
+      return entry?.label || entry?.name || ".codex/sessions";
+    }
+
+    function normalizeDirectoryEntry(entry) {
+      const handle = entry?.handle;
+      if (!handle || handle.kind !== "directory") {
+        return null;
+      }
+      const addedAt = Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now();
+      return {
+        id: String(entry.id || createDirectoryEntryId()),
+        name: entry.name || handle.name || "sessions",
+        label: entry.label || handle.name || ".codex/sessions",
+        handle,
+        addedAt,
+        usedAt: Number.isFinite(entry.usedAt) ? entry.usedAt : addedAt
+      };
+    }
+
+    async function findMatchingDirectoryEntryIndex(entries, handle) {
+      if (!handle) {
+        return -1;
+      }
+      for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index];
+        try {
+          if (entry.handle?.isSameEntry && await entry.handle.isSameEntry(handle)) {
+            return index;
+          }
+        } catch {}
+      }
+      return -1;
+    }
+
+    function sortDirectoryEntries(entries) {
+      return [...entries].sort((a, b) => {
+        const used = (b.usedAt || 0) - (a.usedAt || 0);
+        if (used !== 0) {
+          return used;
+        }
+        return getDirectoryEntryLabel(a).localeCompare(getDirectoryEntryLabel(b), undefined, {
+          numeric: true,
+          sensitivity: "base"
+        });
+      });
+    }
+
+    function updateSavedDirectoryButtons(root = document) {
+      root.querySelectorAll("[data-saved-directories]").forEach(button => {
+        button.hidden = !savedDirectoryEntries.length;
+        button.textContent = savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders";
+      });
+    }
+
+    async function saveDirectoryEntries(entries) {
+      savedDirectoryEntries = sortDirectoryEntries(entries.map(normalizeDirectoryEntry).filter(Boolean));
+      await putStoredValue(SESSIONS_HANDLES_KEY, {
+        version: 1,
+        savedAt: Date.now(),
+        entries: savedDirectoryEntries
+      });
+      updateSavedDirectoryButtons();
+    }
+
+    async function getSavedDirectoryEntries() {
+      const stored = await getStoredValue(SESSIONS_HANDLES_KEY);
+      const storedEntries = Array.isArray(stored?.entries)
+        ? stored.entries
+        : Array.isArray(stored)
+          ? stored
+          : [];
+      const entries = [];
+      for (const storedEntry of storedEntries) {
+        const entry = normalizeDirectoryEntry(storedEntry);
+        if (entry && await findMatchingDirectoryEntryIndex(entries, entry.handle) < 0) {
+          entries.push(entry);
+        }
+      }
+
+      const legacyHandle = await getStoredValue(SESSIONS_HANDLE_KEY);
+      const hadLegacyHandle = legacyHandle?.kind === "directory";
+      if (hadLegacyHandle && await findMatchingDirectoryEntryIndex(entries, legacyHandle) < 0) {
+        entries.push(normalizeDirectoryEntry({
+          id: "dir-legacy-codex-sessions",
+          name: legacyHandle.name || "sessions",
+          label: legacyHandle.name || ".codex/sessions",
+          handle: legacyHandle,
+          addedAt: Date.now(),
+          usedAt: Date.now()
+        }));
+      }
+
+      savedDirectoryEntries = sortDirectoryEntries(entries.filter(Boolean));
+      if (hadLegacyHandle || storedEntries.length !== savedDirectoryEntries.length) {
+        await saveDirectoryEntries(savedDirectoryEntries);
+        if (hadLegacyHandle) {
+          await putStoredValue(SESSIONS_HANDLE_KEY, null);
+        }
+      } else {
+        updateSavedDirectoryButtons();
+      }
+      return savedDirectoryEntries;
+    }
+
+    function getDirectoryEntryById(id) {
+      return savedDirectoryEntries.find(entry => entry.id === id) || null;
+    }
+
+    async function rememberDirectoryHandle(handle, label = handle?.name || ".codex/sessions") {
+      const entries = savedDirectoryEntries.length ? [...savedDirectoryEntries] : [...await getSavedDirectoryEntries()];
+      const now = Date.now();
+      const index = await findMatchingDirectoryEntryIndex(entries, handle);
+      let entry = null;
+      if (index >= 0) {
+        entry = {
+          ...entries[index],
+          name: handle.name || entries[index].name,
+          label: label || entries[index].label,
+          handle,
+          usedAt: now
+        };
+        entries[index] = entry;
+      } else {
+        entry = normalizeDirectoryEntry({
+          id: createDirectoryEntryId(),
+          name: handle.name || "sessions",
+          label: label || handle.name || ".codex/sessions",
+          handle,
+          addedAt: now,
+          usedAt: now
+        });
+        entries.push(entry);
+      }
+      await saveDirectoryEntries(entries);
+      return getDirectoryEntryById(entry.id) || entry;
+    }
+
+    async function touchDirectoryEntry(entry) {
+      if (!entry) {
+        return null;
+      }
+      const entries = savedDirectoryEntries.map(candidate => candidate.id === entry.id
+        ? { ...candidate, usedAt: Date.now() }
+        : candidate
+      );
+      await saveDirectoryEntries(entries);
+      return getDirectoryEntryById(entry.id) || entry;
     }
 
     async function getSavedCurrentRollout() {
@@ -3582,10 +3833,12 @@ export async function renderLocalCodexRolloutDocument() {
       };
     }
 
-    function createSourceFromFileHandle(fileHandle, relativePath) {
+    function createSourceFromFileHandle(fileHandle, relativePath, options = {}) {
       return {
         name: fileHandle.name,
         path: relativePath || fileHandle.name,
+        directoryId: options.directoryId || "",
+        directoryLabel: options.directoryLabel || "",
         fileHandle,
         async getText() {
           return (await fileHandle.getFile()).text();
@@ -3606,13 +3859,13 @@ export async function renderLocalCodexRolloutDocument() {
       };
     }
 
-    async function* walkDirectoryHandle(directoryHandle, basePath = "") {
+    async function* walkDirectoryHandle(directoryHandle, basePath = "", options = {}) {
       for await (const [name, handle] of directoryHandle.entries()) {
         const relativePath = basePath ? `${basePath}/${name}` : name;
         if (handle.kind === "directory") {
-          yield* walkDirectoryHandle(handle, relativePath);
+          yield* walkDirectoryHandle(handle, relativePath, options);
         } else if (handle.kind === "file" && isJsonlFileName(name)) {
-          yield createSourceFromFileHandle(handle, relativePath);
+          yield createSourceFromFileHandle(handle, relativePath, options);
         }
       }
     }
@@ -4027,7 +4280,11 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function renderRolloutIndex(items, label, notice = "") {
-      saveCurrentView({ kind: "index", savedAt: Date.now() });
+      saveCurrentView({
+        kind: "index",
+        directoryId: selectedDirectoryEntry?.id || "",
+        savedAt: Date.now()
+      });
       rolloutIndex = items;
       currentIndexLabel = label;
       currentIndexNotice = notice;
@@ -4048,7 +4305,7 @@ export async function renderLocalCodexRolloutDocument() {
             <p class="standalone-index-meta">
               <span class="standalone-chip">${indexCwdFilter ? `${formatNumber(visibleItems.length)} / ${formatNumber(items.length)} rollouts` : `${formatNumber(items.length)} rollouts`}</span>
               <span class="standalone-chip">${formatNumber(cwdCount)} cwd</span>
-              <span class="standalone-chip">${escapeHtml(getDefaultSessionsPathHint())}</span>
+              <span class="standalone-chip">${escapeHtml(selectedDirectoryEntry ? getDirectoryEntryLabel(selectedDirectoryEntry) : getDefaultSessionsPathHint())}</span>
             </p>
             <div class="standalone-index-controls">
               ${renderCwdFilter(items)}
@@ -4068,10 +4325,10 @@ export async function renderLocalCodexRolloutDocument() {
       updateDefaultPathHint();
     }
 
-    async function loadRolloutSources(sources, label) {
+    async function loadRolloutSources(sources, label, options = {}) {
       const items = [];
       const cache = await getSavedIndexCache();
-      const cacheScope = getIndexCacheScope(label);
+      const cacheScope = getIndexCacheScope(options.cacheScope || label);
       const scopedCache = getScopedIndexCache(cache, cacheScope);
       const nextCache = {
         version: INDEX_CACHE_VERSION,
@@ -4129,14 +4386,30 @@ export async function renderLocalCodexRolloutDocument() {
       renderRolloutIndex(items, label, notice);
     }
 
-    async function loadDirectoryHandle(directoryHandle, label = directoryHandle.name || ".codex/sessions") {
-      if (!await requestReadPermission(directoryHandle)) {
+    async function loadDirectoryEntry(entry) {
+      if (!entry?.handle) {
+        setStatus("Sessions folder was not found.", true);
+        return;
+      }
+      if (!await requestReadPermission(entry.handle)) {
         setStatus("Folder permission was not granted.", true);
         return;
       }
-      await saveDirectoryHandle(directoryHandle);
-      savedDirectoryHandle = directoryHandle;
-      await loadRolloutSources(walkDirectoryHandle(directoryHandle), label);
+      selectedDirectoryEntry = await touchDirectoryEntry(entry);
+      const directoryLabel = getDirectoryEntryLabel(selectedDirectoryEntry);
+      await loadRolloutSources(
+        walkDirectoryHandle(selectedDirectoryEntry.handle, "", {
+          directoryId: selectedDirectoryEntry.id,
+          directoryLabel
+        }),
+        directoryLabel,
+        { cacheScope: selectedDirectoryEntry.id }
+      );
+    }
+
+    async function loadDirectoryHandle(directoryHandle, label = directoryHandle.name || ".codex/sessions") {
+      const entry = await rememberDirectoryHandle(directoryHandle, label);
+      await loadDirectoryEntry(entry);
     }
 
     async function chooseSessionsDirectory() {
@@ -4182,6 +4455,7 @@ export async function renderLocalCodexRolloutDocument() {
           setStatus("File permission was not granted.", true);
           return;
         }
+        selectedDirectoryEntry = null;
         rolloutIndex = [];
         await renderSource(createSourceFromFileHandle(fileHandle, fileHandle.name));
       } catch (error) {
@@ -4191,21 +4465,16 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
-    async function loadSavedDirectory() {
-      if (!savedDirectoryHandle) {
-        savedDirectoryHandle = await getSavedDirectoryHandle();
+    async function forgetDirectoryEntry(id) {
+      const entry = getDirectoryEntryById(id);
+      savedDirectoryEntries = savedDirectoryEntries.filter(candidate => candidate.id !== id);
+      if (selectedDirectoryEntry?.id === id) {
+        selectedDirectoryEntry = null;
       }
-      document.querySelectorAll("[data-saved-directory]").forEach(button => {
-        button.hidden = !savedDirectoryHandle;
-      });
-      if (!savedDirectoryHandle) {
-        return;
-      }
-      if (await hasReadPermission(savedDirectoryHandle)) {
-        await loadDirectoryHandle(savedDirectoryHandle, savedDirectoryHandle.name || ".codex/sessions");
-      } else {
-        setStatus("Saved sessions folder found. Reuse it to grant access again.");
-      }
+      await saveDirectoryEntries(savedDirectoryEntries);
+      await renderDirectorySelectionPage(entry
+        ? `${getDirectoryEntryLabel(entry)} was forgotten.`
+        : "Sessions folder was forgotten.");
     }
 
     async function restoreCurrentRollout() {
@@ -4223,17 +4492,24 @@ export async function renderLocalCodexRolloutDocument() {
         return true;
       }
       if (saved.kind === "directory" && saved.path) {
-        if (!savedDirectoryHandle) {
-          savedDirectoryHandle = await getSavedDirectoryHandle();
+        if (!savedDirectoryEntries.length) {
+          savedDirectoryEntries = await getSavedDirectoryEntries();
         }
-        if (!savedDirectoryHandle || !await hasReadPermission(savedDirectoryHandle)) {
+        const entry = saved.directoryId
+          ? getDirectoryEntryById(saved.directoryId)
+          : savedDirectoryEntries[0];
+        if (!entry?.handle || !await hasReadPermission(entry.handle)) {
           return false;
         }
-        const fileHandle = await getFileHandleByPath(savedDirectoryHandle, saved.path);
+        const fileHandle = await getFileHandleByPath(entry.handle, saved.path);
         if (!fileHandle) {
           return false;
         }
-        await renderSource(createSourceFromFileHandle(fileHandle, saved.path), {
+        selectedDirectoryEntry = entry;
+        await renderSource(createSourceFromFileHandle(fileHandle, saved.path, {
+          directoryId: entry.id,
+          directoryLabel: getDirectoryEntryLabel(entry)
+        }), {
           skipRemember: true
         });
         return true;
@@ -4242,7 +4518,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function getSourceStateId(source) {
-      return source?.path || source?.name || "";
+      return [source?.directoryId || "", source?.path || source?.name || ""].filter(Boolean).join("::");
     }
 
     function splitJsonlCompleteLines(text) {
@@ -4563,7 +4839,15 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function rememberRenderedSource(source) {
-      if (source.fileHandle) {
+      if (source.directoryId && source.path) {
+        await saveCurrentRollout({
+          kind: "directory",
+          directoryId: source.directoryId,
+          directoryLabel: source.directoryLabel || "",
+          name: source.name,
+          path: source.path
+        });
+      } else if (source.fileHandle) {
         await saveCurrentRollout({
           kind: "file",
           name: source.name,
@@ -4695,8 +4979,11 @@ export async function renderLocalCodexRolloutDocument() {
         renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
         return;
       }
-      renderHome();
-      await loadSavedDirectory();
+      if (savedDirectoryEntries.length) {
+        await renderDirectorySelectionPage();
+      } else {
+        renderHome();
+      }
     }
 
     document.addEventListener("click", async event => {
@@ -4718,10 +5005,21 @@ export async function renderLocalCodexRolloutDocument() {
         chooseJsonlFile();
         return;
       }
-      if (event.target.closest("[data-saved-directory]")) {
-        if (savedDirectoryHandle) {
-          loadDirectoryHandle(savedDirectoryHandle, savedDirectoryHandle.name || ".codex/sessions");
+      if (event.target.closest("[data-saved-directories]")) {
+        renderDirectorySelectionPage();
+        return;
+      }
+      const openDirectoryButton = event.target.closest("[data-open-directory-id]");
+      if (openDirectoryButton) {
+        const entry = getDirectoryEntryById(openDirectoryButton.dataset.openDirectoryId);
+        if (entry) {
+          loadDirectoryEntry(entry);
         }
+        return;
+      }
+      const forgetDirectoryButton = event.target.closest("[data-forget-directory-id]");
+      if (forgetDirectoryButton) {
+        await forgetDirectoryEntry(forgetDirectoryButton.dataset.forgetDirectoryId);
         return;
       }
       if (event.target.closest("[data-back-index]")) {
@@ -4746,14 +5044,17 @@ export async function renderLocalCodexRolloutDocument() {
         const sources = getSourcesFromFiles(event.target.files || []);
         event.target.value = "";
         if (sources.length === 1) {
+          selectedDirectoryEntry = null;
           rolloutIndex = [];
           renderSource(sources[0]);
         } else {
+          selectedDirectoryEntry = null;
           loadRolloutSources(sources, "Selected JSONL files");
         }
       } else if (event.target.matches("[data-folder-input]")) {
         const sources = getSourcesFromFiles(event.target.files || []);
         event.target.value = "";
+        selectedDirectoryEntry = null;
         loadRolloutSources(sources, "Selected folder");
       }
     });
@@ -4774,9 +5075,11 @@ export async function renderLocalCodexRolloutDocument() {
       document.body?.classList.remove("is-dragging");
       const sources = await getSourcesFromDrop(event.dataTransfer);
       if (sources.length === 1) {
+        selectedDirectoryEntry = null;
         rolloutIndex = [];
         renderSource(sources[0]);
       } else {
+        selectedDirectoryEntry = null;
         await loadRolloutSources(sources, "Dropped files");
       }
     });
@@ -4791,17 +5094,17 @@ export async function renderLocalCodexRolloutDocument() {
           label.hidden = false;
         });
       }
+      savedDirectoryEntries = await getSavedDirectoryEntries();
       const savedView = await getSavedCurrentView();
       if (savedView?.kind === "rollout" && await restoreCurrentRollout()) {
         return;
       }
-      if (savedView?.kind === "home") {
-        renderHome();
-        await loadSavedDirectory();
+      if (savedDirectoryEntries.length) {
+        await renderDirectorySelectionPage();
         return;
       }
-      if (savedView?.kind === "index" || !savedView) {
-        await loadSavedDirectory();
+      if (savedView?.kind === "home" || savedView?.kind === "folders" || savedView?.kind === "index" || !savedView) {
+        renderHome();
       }
     })();
   </script>
