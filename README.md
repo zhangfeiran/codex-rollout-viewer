@@ -8,13 +8,15 @@ Use the hosted GitHub Pages version:
 
 https://zhangfeiran.github.io/codex-rollout-viewer/
 
-Open the page in Chrome, then use `Add sessions folder` to remember one or more `.codex/sessions` folders, choose a remembered folder from `Sessions folders`, use `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded.
+Open the page in Chrome, then use `Add sessions folder` to remember one or more `.codex/sessions` folders, choose a remembered folder from `Sessions folders`, use `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded. Browsers do not expose absolute folder paths to the page, so remembered folders can store an editable display path.
 
 ## Local HTML
 
 For local/offline use, open `codex-rollout-viewer.html` in Chrome.
 
 The local HTML file has the same viewer UI and can read local rollout files after the same browser permission prompts.
+
+You can copy `codex-rollout-viewer.html` to another filename when you want separate remembered rollout state. Each local HTML path uses its own current rollout, current view, expanded/collapsed state, and render cache.
 
 ## Development
 

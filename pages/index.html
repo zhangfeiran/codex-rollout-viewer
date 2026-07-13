@@ -186,9 +186,21 @@
 
     .standalone-folder-name {
       display: block;
+      width: 100%;
+      padding: 0;
       color: var(--standalone-fg);
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
       font-weight: 650;
+      text-align: left;
       overflow-wrap: anywhere;
+    }
+
+    .standalone-folder-name:hover {
+      color: var(--standalone-blue);
+      text-decoration: underline;
     }
 
     .standalone-folder-subtitle {
@@ -3325,14 +3337,20 @@ export async function renderLocalCodexRolloutDocument() {
     const STANDALONE_CSS = document.querySelector("style")?.textContent || "";
     const DIRECTORY_DB_NAME = "codex-rollout-viewer";
     const DIRECTORY_STORE_NAME = "handles";
+    const STANDALONE_STORAGE_NAMESPACE = getStandaloneStorageNamespace();
+    const SHOULD_READ_LEGACY_STANDALONE_STORAGE = shouldReadLegacyStandaloneStorage();
     const SESSIONS_HANDLE_KEY = "codex-sessions-directory";
     const SESSIONS_HANDLES_KEY = "codex-sessions-directories-v1";
-    const CURRENT_ROLLOUT_KEY = "current-rollout";
-    const CURRENT_ROLLOUT_UI_STATE_KEY = "current-rollout-ui-state";
-    const CURRENT_VIEW_KEY = "current-view";
+    const LEGACY_CURRENT_ROLLOUT_KEY = "current-rollout";
+    const CURRENT_ROLLOUT_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_KEY);
+    const LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY = "current-rollout-ui-state";
+    const CURRENT_ROLLOUT_UI_STATE_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY);
+    const LEGACY_CURRENT_VIEW_KEY = "current-view";
+    const CURRENT_VIEW_KEY = createScopedStorageKey(LEGACY_CURRENT_VIEW_KEY);
     const INDEX_CACHE_KEY = "rollout-index-cache-v1";
     const INDEX_CACHE_VERSION = 1;
-    const CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
+    const LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
+    const CURRENT_ROLLOUT_RENDER_CACHE_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
     const RENDER_CACHE_VERSION = 1;
 
     let savedDirectoryEntries = [];
@@ -3365,6 +3383,38 @@ export async function renderLocalCodexRolloutDocument() {
       }
       status.textContent = message;
       status.classList.toggle("is-error", isError);
+    }
+
+    function getStandaloneStorageNamespace() {
+      try {
+        const url = new URL(location.href);
+        if (url.protocol === "file:") {
+          return decodeURIComponent(url.pathname)
+            .replace(/^\/([A-Za-z]:\/)/, "$1")
+            .replace(/\//g, "\\")
+            .toLowerCase();
+        }
+        return `${url.origin}${url.pathname}`.replace(/\/index\.html$/i, "/").toLowerCase();
+      } catch {
+        return "default";
+      }
+    }
+
+    function createScopedStorageKey(key) {
+      return `${key}::${STANDALONE_STORAGE_NAMESPACE}`;
+    }
+
+    function shouldReadLegacyStandaloneStorage() {
+      try {
+        const url = new URL(location.href);
+        const pathname = decodeURIComponent(url.pathname).replace(/\\/g, "/");
+        if (url.protocol === "file:") {
+          return /(?:^|\/)codex-rollout-viewer\.html$/i.test(pathname);
+        }
+        return /(?:^|\/)(?:index\.html)?$/i.test(pathname);
+      } catch {
+        return false;
+      }
     }
 
     function getDefaultSessionsPathHint() {
@@ -3478,7 +3528,7 @@ export async function renderLocalCodexRolloutDocument() {
                   ${rows.map(entry => `
                     <tr>
                       <td class="standalone-cell-folder-name">
-                        <span class="standalone-folder-name">${escapeHtml(getDirectoryEntryLabel(entry))}</span>
+                        <button class="standalone-folder-name" type="button" data-open-directory-id="${escapeAttribute(entry.id)}">${escapeHtml(getDirectoryEntryLabel(entry))}</button>
                         <p class="standalone-folder-subtitle">${escapeHtml(entry.name || "sessions")}</p>
                       </td>
                       <td><span class="standalone-chip">${escapeHtml(entry.permissionLabel)}</span></td>
@@ -3487,6 +3537,7 @@ export async function renderLocalCodexRolloutDocument() {
                       <td>
                         <div class="standalone-row-actions">
                           <button class="standalone-file-button" type="button" data-open-directory-id="${escapeAttribute(entry.id)}">Open</button>
+                          <button class="standalone-file-button" type="button" data-edit-directory-label-id="${escapeAttribute(entry.id)}">Set path</button>
                           <button class="standalone-file-button is-danger" type="button" data-forget-directory-id="${escapeAttribute(entry.id)}">Forget</button>
                         </div>
                       </td>
@@ -3557,6 +3608,17 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
+    async function getStoredValueWithLegacy(key, legacyKey) {
+      const value = await getStoredValue(key);
+      if (value != null) {
+        return value;
+      }
+      if (!SHOULD_READ_LEGACY_STANDALONE_STORAGE || !legacyKey || legacyKey === key) {
+        return null;
+      }
+      return getStoredValue(legacyKey);
+    }
+
     function createDirectoryEntryId() {
       if (window.crypto?.randomUUID) {
         return `dir-${window.crypto.randomUUID()}`;
@@ -3566,6 +3628,29 @@ export async function renderLocalCodexRolloutDocument() {
 
     function getDirectoryEntryLabel(entry) {
       return entry?.label || entry?.name || ".codex/sessions";
+    }
+
+    function getSuggestedDirectoryLabel(handle, fallback = "") {
+      const name = handle?.name || fallback || ".codex/sessions";
+      return /^sessions$/i.test(name) ? getDefaultSessionsPathHint() : name;
+    }
+
+    function askDirectoryDisplayLabel(handle, currentLabel = "", options = {}) {
+      const fallback = currentLabel || handle?.name || ".codex/sessions";
+      const suggested = currentLabel && currentLabel !== handle?.name
+        ? currentLabel
+        : getSuggestedDirectoryLabel(handle, fallback);
+      if (typeof window.prompt !== "function") {
+        return fallback;
+      }
+      const value = window.prompt(
+        "Browser folder handles do not expose full local paths. Enter the display path for this sessions folder:",
+        suggested
+      );
+      if (value === null) {
+        return Object.prototype.hasOwnProperty.call(options, "cancelValue") ? options.cancelValue : fallback;
+      }
+      return value.trim() || fallback;
     }
 
     function normalizeDirectoryEntry(entry) {
@@ -3714,8 +3799,29 @@ export async function renderLocalCodexRolloutDocument() {
       return getDirectoryEntryById(entry.id) || entry;
     }
 
+    async function editDirectoryEntryLabel(id) {
+      const entry = getDirectoryEntryById(id);
+      if (!entry) {
+        return;
+      }
+      const currentLabel = getDirectoryEntryLabel(entry);
+      const label = askDirectoryDisplayLabel(entry.handle, currentLabel, { cancelValue: null });
+      if (label == null || label === currentLabel) {
+        return;
+      }
+      const entries = savedDirectoryEntries.map(candidate => candidate.id === id
+        ? { ...candidate, label }
+        : candidate
+      );
+      await saveDirectoryEntries(entries);
+      if (selectedDirectoryEntry?.id === id) {
+        selectedDirectoryEntry = getDirectoryEntryById(id);
+      }
+      await renderDirectorySelectionPage("Display path updated.");
+    }
+
     async function getSavedCurrentRollout() {
-      return getStoredValue(CURRENT_ROLLOUT_KEY);
+      return getStoredValueWithLegacy(CURRENT_ROLLOUT_KEY, LEGACY_CURRENT_ROLLOUT_KEY);
     }
 
     async function saveCurrentRollout(value) {
@@ -3723,7 +3829,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function getSavedCurrentRolloutUiState() {
-      return getStoredValue(CURRENT_ROLLOUT_UI_STATE_KEY);
+      return getStoredValueWithLegacy(CURRENT_ROLLOUT_UI_STATE_KEY, LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY);
     }
 
     async function saveCurrentRolloutUiState(value) {
@@ -3732,14 +3838,17 @@ export async function renderLocalCodexRolloutDocument() {
 
     function getLocalCurrentView() {
       try {
-        return JSON.parse(localStorage.getItem(CURRENT_VIEW_KEY) || "null");
+        const legacyValue = SHOULD_READ_LEGACY_STANDALONE_STORAGE
+          ? localStorage.getItem(LEGACY_CURRENT_VIEW_KEY)
+          : null;
+        return JSON.parse(localStorage.getItem(CURRENT_VIEW_KEY) || legacyValue || "null");
       } catch {
         return null;
       }
     }
 
     async function getSavedCurrentView() {
-      return getLocalCurrentView() || getStoredValue(CURRENT_VIEW_KEY);
+      return getLocalCurrentView() || getStoredValueWithLegacy(CURRENT_VIEW_KEY, LEGACY_CURRENT_VIEW_KEY);
     }
 
     async function saveCurrentView(value) {
@@ -3769,7 +3878,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function getSavedCurrentRolloutRenderCache() {
-      const cache = await getStoredValue(CURRENT_ROLLOUT_RENDER_CACHE_KEY);
+      const cache = await getStoredValueWithLegacy(CURRENT_ROLLOUT_RENDER_CACHE_KEY, LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
       return cache?.version === RENDER_CACHE_VERSION ? cache : null;
     }
 
@@ -4412,6 +4521,25 @@ export async function renderLocalCodexRolloutDocument() {
       await loadDirectoryEntry(entry);
     }
 
+    async function restoreSavedIndexView(savedView) {
+      if (!["index", "rollout"].includes(savedView?.kind) || !savedView.directoryId) {
+        return false;
+      }
+      if (!savedDirectoryEntries.length) {
+        savedDirectoryEntries = await getSavedDirectoryEntries();
+      }
+      const entry = getDirectoryEntryById(savedView.directoryId);
+      if (!entry?.handle) {
+        return false;
+      }
+      if (!await hasReadPermission(entry.handle)) {
+        await renderDirectorySelectionPage(`${getDirectoryEntryLabel(entry)} needs permission. Open it again to restore the rollout index.`);
+        return true;
+      }
+      await loadDirectoryEntry(entry);
+      return true;
+    }
+
     async function chooseSessionsDirectory() {
       if (!window.showDirectoryPicker) {
         setStatus("Directory picker is unavailable in this browser. Use Choose folder instead.", true);
@@ -4422,7 +4550,14 @@ export async function renderLocalCodexRolloutDocument() {
           id: "codex-sessions",
           mode: "read"
         });
-        await loadDirectoryHandle(directoryHandle, directoryHandle.name || ".codex/sessions");
+        if (!savedDirectoryEntries.length) {
+          savedDirectoryEntries = await getSavedDirectoryEntries();
+        }
+        const existingIndex = await findMatchingDirectoryEntryIndex(savedDirectoryEntries, directoryHandle);
+        const existingLabel = existingIndex >= 0
+          ? getDirectoryEntryLabel(savedDirectoryEntries[existingIndex])
+          : directoryHandle.name || ".codex/sessions";
+        await loadDirectoryHandle(directoryHandle, askDirectoryDisplayLabel(directoryHandle, existingLabel));
       } catch (error) {
         if (error?.name !== "AbortError") {
           setStatus(`Could not open folder: ${error?.message || error}`, true);
@@ -4892,6 +5027,9 @@ export async function renderLocalCodexRolloutDocument() {
       }
       await saveCurrentView({
         kind: "rollout",
+        directoryId: source.directoryId || "",
+        directoryLabel: source.directoryLabel || "",
+        path: source.path || source.name,
         sourceId: getSourceStateId(source),
         savedAt: Date.now()
       });
@@ -4970,6 +5108,8 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function returnToIndex() {
+      const source = currentRenderedSource;
+      const backDirectoryId = source?.directoryId || selectedDirectoryEntry?.id || "";
       if (currentRenderedSource) {
         await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
         currentRenderedSource = null;
@@ -4978,6 +5118,16 @@ export async function renderLocalCodexRolloutDocument() {
       if (rolloutIndex.length) {
         renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
         return;
+      }
+      if (backDirectoryId) {
+        if (!savedDirectoryEntries.length) {
+          savedDirectoryEntries = await getSavedDirectoryEntries();
+        }
+        const entry = getDirectoryEntryById(backDirectoryId);
+        if (entry?.handle) {
+          await loadDirectoryEntry(entry);
+          return;
+        }
       }
       if (savedDirectoryEntries.length) {
         await renderDirectorySelectionPage();
@@ -5015,6 +5165,11 @@ export async function renderLocalCodexRolloutDocument() {
         if (entry) {
           loadDirectoryEntry(entry);
         }
+        return;
+      }
+      const editDirectoryLabelButton = event.target.closest("[data-edit-directory-label-id]");
+      if (editDirectoryLabelButton) {
+        await editDirectoryEntryLabel(editDirectoryLabelButton.dataset.editDirectoryLabelId);
         return;
       }
       const forgetDirectoryButton = event.target.closest("[data-forget-directory-id]");
@@ -5099,13 +5254,18 @@ export async function renderLocalCodexRolloutDocument() {
       if (savedView?.kind === "rollout" && await restoreCurrentRollout()) {
         return;
       }
-      if (savedDirectoryEntries.length) {
+      if (await restoreSavedIndexView(savedView)) {
+        return;
+      }
+      if (savedView?.kind === "folders" && savedDirectoryEntries.length) {
         await renderDirectorySelectionPage();
         return;
       }
-      if (savedView?.kind === "home" || savedView?.kind === "folders" || savedView?.kind === "index" || !savedView) {
+      if (savedView?.kind === "home" || !savedDirectoryEntries.length) {
         renderHome();
+        return;
       }
+      await renderDirectorySelectionPage();
     })();
   </script>
 </body>
