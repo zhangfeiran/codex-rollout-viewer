@@ -2,6 +2,8 @@ const SOURCE_META = "codex-rollout-source-url";
 const CANONICAL_META = "codex-rollout-canonical-url";
 const JSONL_FILE_PATTERN = /\.jsonl(?:$|[?#])/i;
 const HIGHLIGHT_JS_VENDOR_PATH = "vendor/highlightjs/highlight.min.js";
+const KATEX_JS_VENDOR_PATH = "vendor/katex/katex.min.js";
+const KATEX_CSS_VENDOR_PATH = "vendor/katex/katex.min.css";
 const MAX_DETAILS_STRING_LENGTH = 8000;
 const MAX_DISPLAY_TEXT_LENGTH = 120000;
 const LONG_CONTENT_COLLAPSE_LENGTH = 2200;
@@ -9,6 +11,7 @@ const LONG_MESSAGE_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 const LONG_OUTPUT_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 
 let codeHighlightScriptPromise = null;
+let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 
 const ROLLOUT_CSS = `
@@ -691,6 +694,66 @@ pre + .rollout-kv,
   border-left: 3px solid var(--wh-rollout-border);
 }
 
+.rollout-markdown-table {
+  max-width: 100%;
+  margin: 0 0 7px;
+  overflow-x: auto;
+}
+
+.rollout-markdown-table table {
+  width: max-content;
+  min-width: min(100%, 520px);
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+
+.rollout-markdown-table th,
+.rollout-markdown-table td {
+  min-width: 72px;
+  padding: 5px 8px;
+  vertical-align: top;
+  text-align: left;
+  border: 1px solid var(--wh-rollout-border-muted);
+}
+
+.rollout-markdown-table th {
+  color: var(--wh-rollout-fg);
+  font-weight: 650;
+  background: var(--wh-rollout-panel-strong);
+}
+
+.rollout-markdown-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.rollout-markdown-table .is-align-center {
+  text-align: center;
+}
+
+.rollout-markdown-table .is-align-right {
+  text-align: right;
+}
+
+.rollout-math {
+  max-width: 100%;
+}
+
+.rollout-math.is-inline {
+  display: inline-block;
+  vertical-align: -0.08em;
+}
+
+.rollout-math.is-display {
+  margin: 9px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.rollout-math.is-display .katex-display {
+  margin: 0.35em 0;
+}
+
 .rollout-details {
   margin-top: 7px;
 }
@@ -1097,11 +1160,27 @@ function createTokenStore() {
   };
 }
 
+function renderMathPlaceholder(source, displayMode) {
+  const tagName = displayMode ? "div" : "span";
+  const modeClass = displayMode ? "is-display" : "is-inline";
+  return `<${tagName} class="rollout-math ${modeClass}" data-rollout-math data-rollout-display="${displayMode}">${escapeHtml(source)}</${tagName}>`;
+}
+
+function protectInlineMath(value, tokenStore) {
+  let text = String(value ?? "");
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_match, source) => tokenStore.push(renderMathPlaceholder(source, false)));
+  text = text.replace(/(^|[^\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\$)/g, (_match, prefix, source) => {
+    return `${prefix}${tokenStore.push(renderMathPlaceholder(source, false))}`;
+  });
+  return text;
+}
+
 function renderInlineMarkdown(value) {
   const tokenStore = createTokenStore();
   let text = String(value ?? "");
-  text = text.replace(/\\([\\`*_[\]{}()#+\-.!|>])/g, (_match, character) => tokenStore.push(escapeHtml(character)));
   text = text.replace(/`([^`\n]+)`/g, (_match, code) => tokenStore.push(`<code>${escapeHtml(code)}</code>`));
+  text = protectInlineMath(text, tokenStore);
+  text = text.replace(/\\([\\`*_[\]{}()#+\-.!|>])/g, (_match, character) => tokenStore.push(escapeHtml(character)));
   text = text.replace(/!\[([^\]]*)\]\((\S+?)(?:\s+["']([^"']+)["'])?\)/g, (_match, alt, url, title) => {
     const src = sanitizeUrl(url);
     if (!src) {
@@ -1144,9 +1223,168 @@ function getListMatch(line) {
   return /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
 }
 
+function splitMarkdownTableRow(line) {
+  const text = String(line ?? "").trim();
+  if (!text.includes("|")) {
+    return null;
+  }
+
+  const cells = [];
+  let cell = "";
+  let separatorCount = 0;
+  let inCode = false;
+  let mathEnd = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const pair = text.slice(index, index + 2);
+    if (!inCode && mathEnd === "\\)" && pair === "\\)") {
+      cell += pair;
+      mathEnd = null;
+      index += 1;
+      continue;
+    }
+    if (!inCode && !mathEnd && pair === "\\(") {
+      cell += pair;
+      mathEnd = "\\)";
+      index += 1;
+      continue;
+    }
+    if (!inCode && character === "$" && text[index - 1] !== "\\") {
+      mathEnd = mathEnd === "$" ? null : mathEnd ? mathEnd : "$";
+      cell += character;
+      continue;
+    }
+    if (!mathEnd && character === "`") {
+      inCode = !inCode;
+      cell += character;
+      continue;
+    }
+    if (character === "\\" && index + 1 < text.length) {
+      cell += character + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (character === "|" && !inCode && !mathEnd) {
+      cells.push(cell.trim());
+      cell = "";
+      separatorCount += 1;
+      continue;
+    }
+    cell += character;
+  }
+  cells.push(cell.trim());
+
+  if (!separatorCount) {
+    return null;
+  }
+  if (text.startsWith("|") && cells[0] === "") {
+    cells.shift();
+  }
+  if (text.endsWith("|") && cells.at(-1) === "") {
+    cells.pop();
+  }
+  return cells;
+}
+
+function getTableAlignment(delimiter) {
+  const value = String(delimiter ?? "").trim();
+  if (!/^:?-{3,}:?$/.test(value)) {
+    return null;
+  }
+  if (value.startsWith(":") && value.endsWith(":")) {
+    return "center";
+  }
+  if (value.endsWith(":")) {
+    return "right";
+  }
+  return "left";
+}
+
+function getMarkdownTable(lines, index) {
+  const header = splitMarkdownTableRow(lines[index]);
+  const delimiters = splitMarkdownTableRow(lines[index + 1]);
+  if (!header?.length || !delimiters || delimiters.length !== header.length) {
+    return null;
+  }
+  const alignments = delimiters.map(getTableAlignment);
+  if (alignments.some(alignment => !alignment)) {
+    return null;
+  }
+
+  const rows = [];
+  let nextIndex = index + 2;
+  while (nextIndex < lines.length && !isBlank(lines[nextIndex])) {
+    const cells = splitMarkdownTableRow(lines[nextIndex]);
+    if (!cells) {
+      break;
+    }
+    rows.push(Array.from({ length: header.length }, (_unused, cellIndex) => cells[cellIndex] ?? ""));
+    nextIndex += 1;
+  }
+  return { header, alignments, rows, nextIndex };
+}
+
+function renderMarkdownTable(table) {
+  const renderCell = (tagName, value, alignment) => {
+    const alignmentClass = alignment === "left" ? "" : ` class="is-align-${alignment}"`;
+    return `<${tagName}${alignmentClass}>${renderInlineMarkdown(value)}</${tagName}>`;
+  };
+  const header = table.header
+    .map((cell, index) => renderCell("th", cell, table.alignments[index]))
+    .join("");
+  const body = table.rows.length
+    ? `<tbody>${table.rows.map(row => `<tr>${row.map((cell, index) => renderCell("td", cell, table.alignments[index])).join("")}</tr>`).join("")}</tbody>`
+    : "";
+  return `<div class="rollout-markdown-table"><table><thead><tr>${header}</tr></thead>${body}</table></div>`;
+}
+
+function isMathBlockStartLine(line) {
+  const trimmed = String(line ?? "").trim();
+  return trimmed.startsWith("\\[") || trimmed.startsWith("$$");
+}
+
+function getMathBlock(lines, index) {
+  const firstLine = String(lines[index] ?? "").trim();
+  const delimiters = firstLine.startsWith("\\[")
+    ? { left: "\\[", right: "\\]" }
+    : firstLine.startsWith("$$")
+      ? { left: "$$", right: "$$" }
+      : null;
+  if (!delimiters) {
+    return null;
+  }
+
+  const sourceLines = [];
+  const firstRemainder = firstLine.slice(delimiters.left.length);
+  const sameLineEnd = firstRemainder.indexOf(delimiters.right);
+  if (sameLineEnd >= 0 && !firstRemainder.slice(sameLineEnd + delimiters.right.length).trim()) {
+    return {
+      source: firstRemainder.slice(0, sameLineEnd).trim(),
+      nextIndex: index + 1
+    };
+  }
+  if (firstRemainder) {
+    sourceLines.push(firstRemainder);
+  }
+
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const currentLine = lines[cursor];
+    const endIndex = currentLine.indexOf(delimiters.right);
+    if (endIndex >= 0 && !currentLine.slice(endIndex + delimiters.right.length).trim()) {
+      sourceLines.push(currentLine.slice(0, endIndex));
+      return {
+        source: sourceLines.join("\n").trim(),
+        nextIndex: cursor + 1
+      };
+    }
+    sourceLines.push(currentLine);
+  }
+  return null;
+}
+
 function isBlockStart(lines, index) {
   const line = lines[index] ?? "";
-  return isBlank(line) || Boolean(isHeading(line)) || /^\s{0,3}>/.test(line) || Boolean(getListMatch(line));
+  return isBlank(line) || Boolean(getMarkdownTable(lines, index)) || isMathBlockStartLine(line) || Boolean(isHeading(line)) || /^\s{0,3}>/.test(line) || Boolean(getListMatch(line));
 }
 
 function renderMarkdownBlocks(value) {
@@ -1158,6 +1396,20 @@ function renderMarkdownBlocks(value) {
     const line = lines[index];
     if (isBlank(line)) {
       index += 1;
+      continue;
+    }
+
+    const mathBlock = getMathBlock(lines, index);
+    if (mathBlock) {
+      html.push(renderMathPlaceholder(mathBlock.source, true));
+      index = mathBlock.nextIndex;
+      continue;
+    }
+
+    const table = getMarkdownTable(lines, index);
+    if (table) {
+      html.push(renderMarkdownTable(table));
+      index = table.nextIndex;
       continue;
     }
 
@@ -2695,7 +2947,7 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
     if (index < nodes.length) {
       schedule(renderChunk);
     } else {
-      highlightCodeBlocks();
+      enhanceRenderedContent();
     }
   };
   schedule(renderChunk);
@@ -2754,7 +3006,7 @@ function initRolloutControls() {
     if (details.matches("[data-rollout-lazy-sidebar]")) {
       renderLazySidebar(details);
     }
-    highlightCodeBlocks();
+    enhanceRenderedContent();
   }, true);
   document.addEventListener("click", event => {
     const button = event.target.closest("[data-rollout-diff-mode]");
@@ -2792,12 +3044,12 @@ function getRuntimeUrl(path) {
   }
 }
 
-function loadPageScript(url) {
+function loadPageScript(url, assetName) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
     script.src = url;
     script.async = true;
-    script.dataset.codexRolloutRenderedAsset = "highlightjs";
+    script.dataset.codexRolloutRenderedAsset = assetName;
     script.addEventListener("load", () => resolve());
     script.addEventListener("error", () => {
       script.remove();
@@ -2807,17 +3059,52 @@ function loadPageScript(url) {
   });
 }
 
+function loadPageStylesheet(url, assetName) {
+  return new Promise((resolve, reject) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = url;
+    link.dataset.codexRolloutRenderedAsset = assetName;
+    link.addEventListener("load", () => resolve());
+    link.addEventListener("error", () => {
+      link.remove();
+      reject(new Error(`Failed to load stylesheet: ${url}`));
+    });
+    document.head.append(link);
+  });
+}
+
 function ensureCodeHighlightScript() {
   if (!codeHighlightScriptPromise) {
     const url = getRuntimeUrl(HIGHLIGHT_JS_VENDOR_PATH);
     codeHighlightScriptPromise = url
-      ? loadPageScript(url).catch(error => {
+      ? loadPageScript(url, "highlightjs").catch(error => {
         codeHighlightScriptPromise = null;
         throw error;
       })
       : Promise.reject(new Error("Highlight.js URL unavailable"));
   }
   return codeHighlightScriptPromise;
+}
+
+function ensureMathRenderAssets() {
+  if (window.katex) {
+    return Promise.resolve();
+  }
+  if (!mathRenderAssetsPromise) {
+    const scriptUrl = getRuntimeUrl(KATEX_JS_VENDOR_PATH);
+    const stylesheetUrl = getRuntimeUrl(KATEX_CSS_VENDOR_PATH);
+    mathRenderAssetsPromise = scriptUrl && stylesheetUrl
+      ? Promise.all([
+          loadPageStylesheet(stylesheetUrl, "katex-css"),
+          loadPageScript(scriptUrl, "katex-js")
+        ]).catch(error => {
+          mathRenderAssetsPromise = null;
+          throw error;
+        })
+      : Promise.reject(new Error("KaTeX asset URL unavailable"));
+  }
+  return mathRenderAssetsPromise;
 }
 
 function isCodeBlockVisibleForHighlight(node) {
@@ -2873,6 +3160,40 @@ async function highlightCodeBlocks() {
   }
 }
 
+async function renderMathExpressions() {
+  const nodes = [...document.querySelectorAll("article.codex-rollout [data-rollout-math]:not([data-rollout-math-rendered])")]
+    .filter(isCodeBlockVisibleForHighlight);
+  if (!nodes.length) {
+    return;
+  }
+  try {
+    await ensureMathRenderAssets();
+    if (!window.katex) {
+      return;
+    }
+    for (const node of nodes) {
+      const source = node.textContent || "";
+      try {
+        window.katex.render(source, node, {
+          displayMode: node.dataset.rolloutDisplay === "true",
+          throwOnError: false,
+          strict: "warn",
+          trust: false
+        });
+        node.dataset.rolloutMathRendered = "yes";
+      } catch (error) {
+        console.warn("[codex-rollout-viewer] Could not render math expression", error);
+      }
+    }
+  } catch (error) {
+    console.warn("[codex-rollout-viewer] KaTeX unavailable", error);
+  }
+}
+
+async function enhanceRenderedContent() {
+  await Promise.all([highlightCodeBlocks(), renderMathExpressions()]);
+}
+
 export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   ensureDocumentStructure();
   const parsed = parseCodexRolloutJsonl(jsonl);
@@ -2888,7 +3209,7 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href
   });
-  await highlightCodeBlocks();
+  await enhanceRenderedContent();
   return {
     rendered: true,
     records: records.length,
@@ -2903,7 +3224,7 @@ export async function renderCodexRolloutRecords(parsed, options = {}) {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href
   });
-  await highlightCodeBlocks();
+  await enhanceRenderedContent();
   return {
     rendered: true,
     records: records.length,
@@ -2916,13 +3237,13 @@ export async function renderLocalCodexRolloutDocument() {
     return false;
   }
   if (document.documentElement?.dataset?.codexRolloutRendered === "rendered") {
-    await highlightCodeBlocks();
+    await enhanceRenderedContent();
     return true;
   }
   ensureDocumentStructure();
   const raw = getRawJsonlFromDocument();
   if (raw === null) {
-    await highlightCodeBlocks();
+    await enhanceRenderedContent();
     return true;
   }
   const parsed = parseCodexRolloutJsonl(raw);
@@ -2930,6 +3251,6 @@ export async function renderLocalCodexRolloutDocument() {
     return false;
   }
   renderDocument(createRenderableRecords(parsed.records), parsed.errors);
-  await highlightCodeBlocks();
+  await enhanceRenderedContent();
   return true;
 }

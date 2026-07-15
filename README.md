@@ -12,24 +12,21 @@ Open the page in Chrome, then use `Add sessions folder` to remember one or more 
 
 ## Local HTML
 
-For local/offline use, open `codex-rollout-viewer.html` in Chrome.
+For local/offline use, open `codex-rollout-viewer.html` or `codex-rollout-viewer2.html` in Chrome.
 
-The local HTML file has the same viewer UI and can read local rollout files after the same browser permission prompts.
+The local HTML file has the same viewer UI and can read local rollout files after the same browser permission prompts. Markdown content supports GFM-style tables, inline math with `\(...\)` or `$...$`, and display math with `\[...\]` or `$$...$$`. KaTeX and its fonts are vendored locally, so formula rendering also works offline.
 
-You can copy `codex-rollout-viewer.html` to another filename when you want separate remembered rollout state. Each local HTML path uses its own current rollout, current view, expanded/collapsed state, and render cache.
+`codex-rollout-viewer2.html` is a synchronized copy for a second independent remembered rollout state. Treat `codex-rollout-viewer.html` as the source: `npm run export:pages` refreshes `codex-rollout-viewer2.html` and `pages/index.html` from it. Each local HTML path uses its own current rollout, current view, expanded/collapsed state, and render cache.
 
 ## Development
 
-```bash
-npm run check
-```
-
-Regenerate the GitHub Pages build after changing `codex-rollout-viewer.html` or `rollout-renderer.js`:
+Synchronize the second local HTML file and regenerate the GitHub Pages build after changing `codex-rollout-viewer.html` or `rollout-renderer.js`:
 
 ```bash
 npm run export:pages
+npm run check
 ```
 
-The export writes `pages/index.html` and the local Highlight.js asset. The GitHub Actions workflow in `.github/workflows/pages.yml` runs the same export step and deploys `pages/` to GitHub Pages when `main` is pushed.
+The export synchronizes `codex-rollout-viewer2.html`, writes `pages/index.html`, and copies the local Highlight.js and KaTeX assets. The GitHub Actions workflow in `.github/workflows/pages.yml` runs the same export step and deploys `pages/` to GitHub Pages when `main` is pushed.
 
 In the GitHub repository settings, configure Pages to use **GitHub Actions** as the source. If the workflow fails with `Get Pages site failed ... Not Found`, Pages has not been enabled for the repository yet.

@@ -1,13 +1,16 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const pagesDir = path.join(projectDir, "pages");
 const highlightDir = path.join(pagesDir, "vendor", "highlightjs");
+const localHtmlSource = path.join(projectDir, "codex-rollout-viewer.html");
+const localHtmlCopy = path.join(projectDir, "codex-rollout-viewer2.html");
 
 await mkdir(highlightDir, { recursive: true });
 
-await copyFile(path.join(projectDir, "codex-rollout-viewer.html"), path.join(pagesDir, "index.html"));
+await copyFile(localHtmlSource, localHtmlCopy);
+await copyFile(localHtmlSource, path.join(pagesDir, "index.html"));
 await copyFile(
   path.join(projectDir, "vendor", "highlightjs", "highlight.min.js"),
   path.join(highlightDir, "highlight.min.js")
@@ -16,6 +19,7 @@ await copyFile(
   path.join(projectDir, "vendor", "highlightjs", "LICENSE"),
   path.join(highlightDir, "LICENSE")
 );
+await cp(path.join(projectDir, "vendor", "katex"), path.join(pagesDir, "vendor", "katex"), { recursive: true });
 
 await writeFile(path.join(pagesDir, ".nojekyll"), "", "utf8");
 
@@ -47,4 +51,4 @@ await writeFile(
   "utf8"
 );
 
-console.log(`Exported GitHub Pages static site to ${path.relative(projectDir, pagesDir)}`);
+console.log(`Synced ${path.basename(localHtmlCopy)} and exported GitHub Pages static site to ${path.relative(projectDir, pagesDir)}`);

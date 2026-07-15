@@ -9,7 +9,10 @@ This project only owns Codex rollout JSONL viewing. It is intentionally separate
 ## Source Layout
 
 - `codex-rollout-viewer.html`
-  Local/offline HTML entrypoint. It embeds `rollout-renderer.js` between sync markers.
+  Canonical local/offline HTML entrypoint. It embeds `rollout-renderer.js` between sync markers.
+
+- `codex-rollout-viewer2.html`
+  Generated synchronized local/offline copy. Do not edit it directly; `npm run export:pages` refreshes it from `codex-rollout-viewer.html`. Its distinct path keeps remembered rollout state separate.
 
 - `rollout-renderer.js`
   Self-contained Codex rollout parser and dark-mode HTML renderer.
@@ -24,15 +27,15 @@ This project only owns Codex rollout JSONL viewing. It is intentionally separate
   Syntax and embedded-renderer sync checks.
 
 - `scripts/export-pages.mjs`
-  Regenerates the GitHub Pages build.
+  Synchronizes `codex-rollout-viewer2.html` and regenerates the GitHub Pages build.
 
 ## Workflow
 
 - Edit files in this directory directly.
-- Run `npm run check`.
-- Run `npm run export:pages` after changing `codex-rollout-viewer.html` or `rollout-renderer.js`.
+- Run `npm run export:pages` after changing `codex-rollout-viewer.html` or `rollout-renderer.js`; this also refreshes `codex-rollout-viewer2.html`.
+- Run `npm run check` after exporting; it verifies both local HTML files and their embedded renderer copies.
 - Prefer the hosted Pages version for normal use: https://zhangfeiran.github.io/codex-rollout-viewer/
-- For local/offline use, open `codex-rollout-viewer.html` in Chrome.
+- For local/offline use, open `codex-rollout-viewer.html` or `codex-rollout-viewer2.html` in Chrome.
 
 ## Modification Rules
 
