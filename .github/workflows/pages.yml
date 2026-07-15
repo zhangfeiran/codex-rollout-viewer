@@ -35,6 +35,8 @@ jobs:
 
       - name: Export Pages
         run: npm run export:pages
+        env:
+          CODEX_ROLLOUT_PAGES_DIR: ${{ runner.temp }}/codex-rollout-viewer-pages
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
@@ -42,7 +44,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: pages
+          path: ${{ runner.temp }}/codex-rollout-viewer-pages
 
       - name: Deploy
         id: deployment
