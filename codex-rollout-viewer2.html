@@ -2070,6 +2070,23 @@ function isToolName(name, expected) {
   return new RegExp(`(^|[.])${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(String(name ?? ""));
 }
 
+function mergeRenderedUiStateSnapshots(baseState, observedState) {
+  if (!baseState || baseState.sourceId !== observedState?.sourceId) {
+    return observedState;
+  }
+  return {
+    ...observedState,
+    details: {
+      ...(baseState.details || {}),
+      ...(observedState.details || {})
+    },
+    diffModes: {
+      ...(baseState.diffModes || {}),
+      ...(observedState.diffModes || {})
+    }
+  };
+}
+
 function getPlanStatusMeta(status) {
   const normalized = String(status || "pending").toLowerCase().replace(/[\s-]+/g, "_");
   if (normalized === "completed") {
@@ -2753,7 +2770,8 @@ function decodeJsStringLiteral(literal) {
 }
 
 function readJsStringProperty(objectText, propertyName) {
-  const propertyPattern = new RegExp(`(?:^|[,{\\n])\\s*${propertyName}\\s*:\\s*`, "g");
+  const escapedName = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const propertyPattern = new RegExp(`(?:^|[,{\\n])\\s*(?:["']${escapedName}["']|${escapedName})\\s*:\\s*`, "g");
   const match = propertyPattern.exec(objectText);
   if (!match) {
     return "";
@@ -2799,6 +2817,76 @@ function parseExecCommandCalls(input) {
     invocationPattern.lastIndex = objectStart + objectText.length;
   }
   return calls;
+}
+
+function parseJsonLikeObjectLiteral(objectText) {
+  try {
+    return JSON.parse(objectText);
+  } catch {
+    try {
+      const jsonText = objectText
+        .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
+        .replace(/,\s*([}\]])/g, "$1");
+      return JSON.parse(jsonText);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function parseNestedToolArguments(input, toolName) {
+  const source = String(input ?? "");
+  const escapedName = toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const invocationPattern = new RegExp(`tools\\.${escapedName}\\s*\\(`, "g");
+  const values = [];
+  let match = null;
+  while ((match = invocationPattern.exec(source))) {
+    const objectStart = source.indexOf("{", invocationPattern.lastIndex);
+    if (objectStart < 0) {
+      continue;
+    }
+    const objectText = extractBalancedObject(source, objectStart);
+    if (!objectText) {
+      continue;
+    }
+    const value = parseJsonLikeObjectLiteral(objectText);
+    if (value) {
+      values.push(value);
+    }
+    invocationPattern.lastIndex = objectStart + objectText.length;
+  }
+  return values;
+}
+
+function parseExecWrapperOutput(output) {
+  const parsed = parseStructuredToolOutput(output);
+  if (parsed.results.length) {
+    return parsed;
+  }
+  const [header = "", ...remainingBlocks] = parsed.textBlocks;
+  const headerMatch = String(header).match(/^Script (completed|running|failed)\b(?:[^\n]*\n)*?Wall time\s+([\d.]+)\s+seconds\s*\nOutput:\s*\n?/i);
+  if (!headerMatch) {
+    return parsed;
+  }
+  const outputParts = [String(header).slice(headerMatch[0].length), ...remainingBlocks.map(String)];
+  let outputText = outputParts.join("\n").replace(/^\n+|\n+$/g, "");
+  let exitCode = null;
+  outputText = outputText.replace(/(?:^|\n)\s*exit_code=(-?\d+)\s*(?=\n|$)/gi, (whole, value) => {
+    exitCode = Number(value);
+    return "";
+  }).replace(/^\n+|\n+$/g, "");
+  const sessionMatch = String(header).match(/cell ID\s+(\S+)/i);
+  return {
+    textBlocks: parsed.textBlocks,
+    results: [{
+      output: outputText,
+      exit_code: exitCode,
+      wall_time_seconds: Number(headerMatch[2]),
+      session_id: sessionMatch?.[1] ?? null,
+      script_status: headerMatch[1].toLowerCase()
+    }],
+    plainText: []
+  };
 }
 
 function summarizeRecords(records, parseErrors) {
@@ -3184,7 +3272,7 @@ function renderToolOutputDetails(output, record, suffix = "output", label = "Out
 function renderExecCommandPair(command, result, index, total, record) {
   const commandText = String(command?.command ?? "");
   const outputText = String(result?.output ?? "");
-  const exitCode = Number(result?.exit_code);
+  const exitCode = result?.exit_code == null ? Number.NaN : Number(result.exit_code);
   const hasExitCode = Number.isFinite(exitCode);
   const meta = [
     hasExitCode ? `exit ${exitCode}` : "",
@@ -3234,16 +3322,20 @@ function renderExecToolGroup(record) {
   const outputPayload = group.outputRecord?.value?.payload ?? {};
   const input = String(callPayload.input ?? callPayload.arguments ?? "");
   const commands = parseExecCommandCalls(input);
-  const parsedOutput = parseStructuredToolOutput(outputPayload.output);
-  const total = Math.max(commands.length, parsedOutput.results.length);
-  const pairs = Array.from({ length: total }, (unused, index) =>
-    renderExecCommandPair(commands[index], parsedOutput.results[index], index, total, record)
+  const updatePlans = parseNestedToolArguments(input, "update_plan");
+  const parsedOutput = commands.length === 1
+    ? parseExecWrapperOutput(outputPayload.output)
+    : parseStructuredToolOutput(outputPayload.output);
+  const pairs = Array.from({ length: commands.length }, (unused, index) =>
+    renderExecCommandPair(commands[index], parsedOutput.results[index], index, commands.length, record)
   );
   const patches = group.eventRecords.map(renderAttachedPatchEvent);
-  const supplementalOutput = parsedOutput.plainText
-    .filter(text => !/^Script (?:completed|running)\b/i.test(text.trim()) && !/^(?:\{\}|\[\])$/.test(text.trim()))
+  const unmatchedResults = parsedOutput.results.slice(commands.length).map(result => getReadableToolOutput(JSON.stringify(result)));
+  const supplementalOutput = [...unmatchedResults, ...parsedOutput.plainText]
+    .filter(text => !/^Script (?:completed|running|failed)\b/i.test(text.trim()) && !/^(?:\{\}|\[\])$/.test(text.trim()))
     .join("\n");
-  const failed = parsedOutput.results.some(result => Number(result.exit_code) !== 0)
+  const failed = parsedOutput.results.some(result => result.script_status === "failed"
+    || (result.exit_code != null && Number(result.exit_code) !== 0))
     || group.eventRecords.some(eventRecord => eventRecord.value?.payload?.success === false);
   const body = [
     renderKeyValueList([
@@ -3251,16 +3343,19 @@ function renderExecToolGroup(record) {
       ["Call ID", callPayload.call_id],
       ["Status", callPayload.status],
       ["Commands", commands.length || null],
+      ["Plans", updatePlans.length || null],
       ["Patches", patches.length || null]
     ]),
+    updatePlans.map(renderUpdatePlanMarkdown).join("\n"),
     pairs.length ? `<div class="rollout-tool-results">${pairs.join("")}</div>` : "",
     patches.length ? `<div class="rollout-tool-results">${patches.join("")}</div>` : "",
     supplementalOutput ? renderLazyCodeDetails("Additional output", supplementalOutput, "text", `record-${record.line}:additional-output`) : "",
-    !commands.length ? renderLazyCodeDetails("Raw exec input", input, "javascript", `record-${record.line}:raw-input`) : ""
+    !commands.length && !updatePlans.length ? renderLazyCodeDetails("Raw exec input", input, "javascript", `record-${record.line}:raw-input`) : ""
   ].filter(Boolean).join("\n");
   const title = [
     "exec",
     commands.length ? `${formatNumber(commands.length)} command${commands.length === 1 ? "" : "s"}` : "",
+    updatePlans.length ? `${formatNumber(updatePlans.length)} plan${updatePlans.length === 1 ? "" : "s"}` : "",
     patches.length ? `${formatNumber(patches.length)} patch${patches.length === 1 ? "" : "es"}` : ""
   ].filter(Boolean).join(" / ");
   return renderEntry(record, "tool", title, body, {
@@ -3686,6 +3781,9 @@ function renderLazyTurn(details) {
     return;
   }
   body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
+  document.dispatchEvent(new CustomEvent("codex-rollout-lazy-mounted", {
+    detail: { root: details }
+  }));
 }
 
 function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
@@ -3740,7 +3838,7 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
+    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
@@ -5604,12 +5702,13 @@ export async function renderLocalCodexRolloutDocument() {
         }
         diffModes[node.dataset.rolloutStateKey] = getDiffMode(node);
       });
-      return {
+      const observedState = {
         sourceId: getSourceStateId(source),
         savedAt: Date.now(),
         details,
         diffModes
       };
+      return mergeRenderedUiStateSnapshots(currentRenderedUiState, observedState);
     }
 
     function applyDiffMode(diff, mode) {
@@ -5681,12 +5780,8 @@ export async function renderLocalCodexRolloutDocument() {
     function persistRenderedUiStateSoon(source) {
       clearTimeout(persistRenderedUiStateSoon.timer);
       persistRenderedUiStateSoon.timer = setTimeout(() => {
-        if (currentRenderedUiState) {
-          currentRenderedUiState.savedAt = Date.now();
-          saveCurrentRolloutUiState(currentRenderedUiState);
-        } else {
-          saveCurrentRolloutUiState(captureRenderedUiState(source));
-        }
+        currentRenderedUiState = captureRenderedUiState(source);
+        saveCurrentRolloutUiState(currentRenderedUiState);
       }, 120);
     }
 
@@ -5709,6 +5804,25 @@ export async function renderLocalCodexRolloutDocument() {
           currentRenderedUiState.details[key] = true;
         }
         persistRenderedUiStateSoon(currentRenderedSource);
+      });
+      document.addEventListener("codex-rollout-lazy-mounted", event => {
+        if (!currentRenderedUiState || !event.detail?.root) {
+          return;
+        }
+        const wasRestoring = isRestoringRenderedUiState;
+        isRestoringRenderedUiState = true;
+        document.documentElement.dataset.rolloutRestoringState = "true";
+        try {
+          applySavedRenderedUiState(event.detail.root);
+        } finally {
+          if (!wasRestoring) {
+            isRestoringRenderedUiState = false;
+            delete document.documentElement.dataset.rolloutRestoringState;
+          }
+        }
+        document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
+          detail: { defer: true, kind: "content" }
+        }));
       });
       document.addEventListener("toggle", event => {
         const node = event.target;
@@ -5790,7 +5904,8 @@ export async function renderLocalCodexRolloutDocument() {
     async function renderSource(source, options = {}) {
       if (currentRenderedSource) {
         clearTimeout(persistRenderedUiStateSoon.timer);
-        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
+        await saveCurrentRolloutUiState(currentRenderedUiState);
       }
       clearTimeout(persistRenderedUiStateSoon.timer);
       currentRenderedSource = null;
@@ -5904,7 +6019,8 @@ export async function renderLocalCodexRolloutDocument() {
       const source = currentRenderedSource;
       const backDirectoryId = source?.directoryId || selectedDirectoryEntry?.id || "";
       if (currentRenderedSource) {
-        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
+        await saveCurrentRolloutUiState(currentRenderedUiState);
         currentRenderedSource = null;
         currentRenderedUiState = null;
       }
@@ -5977,7 +6093,8 @@ export async function renderLocalCodexRolloutDocument() {
 
     window.addEventListener("beforeunload", () => {
       if (currentRenderedSource) {
-        saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
+        saveCurrentRolloutUiState(currentRenderedUiState);
       }
     });
 

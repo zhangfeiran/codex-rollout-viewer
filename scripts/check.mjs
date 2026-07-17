@@ -62,6 +62,9 @@ async function checkLocalHtml(fileName) {
   } catch (error) {
     throw new Error(`${fileName} boot script has invalid syntax: ${error.message}`);
   }
+  assert.doesNotMatch(bootScript, /currentRenderedUiState\s*\|\|\s*captureRenderedUiState/, "refresh persistence must capture mounted details instead of trusting only the event snapshot");
+  assert.match(bootScript, /mergeRenderedUiStateSnapshots\(currentRenderedUiState, observedState\)/, "captured details must preserve state for unmounted lazy sections");
+  assert.match(bootScript, /codex-rollout-lazy-mounted/, "lazy turn mounts must trigger a second saved-state application");
 }
 
 async function checkSynchronizedLocalHtmlCopy() {
@@ -77,7 +80,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, openSidebarRolloutTarget, parseExecCommandCalls, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, mergeRenderedUiStateSnapshots, openSidebarRolloutTarget, parseExecCommandCalls, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderLazyTurn, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, storeLazyRolloutContent };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -185,6 +188,40 @@ async function checkMarkdownRendering() {
   assert.match(mainSectionHtml, /data-rollout-level="2"/, "main assistant sections must remain level two");
   assert.match(mainSectionHtml, /data-rollout-state-key="assistant-2:body"/, "main assistant section state must remain persistent");
 
+  const mergedUiState = rendererContext.__rolloutTest.mergeRenderedUiStateSnapshots({
+    sourceId: "rollout.jsonl",
+    details: { "turn-1:body": true, "assistant-2:body": false, "assistant-unmounted:body": true },
+    diffModes: { "record-unmounted:patch-mode": "split" }
+  }, {
+    sourceId: "rollout.jsonl",
+    savedAt: 2,
+    details: { "turn-1:body": true, "assistant-2:body": true },
+    diffModes: { "record-mounted:patch-mode": "unified" }
+  });
+  assert.equal(mergedUiState.details["assistant-2:body"], true, "mounted level-two state must override a stale event snapshot before refresh");
+  assert.equal(mergedUiState.details["assistant-unmounted:body"], true, "unmounted lazy level-two state must survive refresh capture");
+  assert.equal(mergedUiState.diffModes["record-unmounted:patch-mode"], "split", "unmounted lazy diff state must survive refresh capture");
+
+  const mountedEvents = [];
+  rendererContext.CustomEvent = class {
+    constructor(type, options = {}) {
+      this.type = type;
+      this.detail = options.detail;
+    }
+  };
+  rendererContext.document = {
+    dispatchEvent: event => mountedEvents.push(event)
+  };
+  const stateLazyTurnBody = { childNodes: [], innerHTML: "" };
+  const stateLazyTurn = {
+    dataset: { rolloutLazyKey: rendererContext.__rolloutTest.storeLazyRolloutContent("level-two markup") },
+    querySelector: selector => selector === "[data-rollout-lazy-turn-body]" ? stateLazyTurnBody : null
+  };
+  rendererContext.__rolloutTest.renderLazyTurn(stateLazyTurn);
+  assert.equal(stateLazyTurnBody.innerHTML, "level-two markup", "lazy turn body must mount before state restoration runs");
+  assert.equal(mountedEvents[0]?.type, "codex-rollout-lazy-mounted", "lazy turn mount must announce that level-two state can be restored");
+  assert.equal(mountedEvents[0]?.detail?.root, stateLazyTurn, "lazy mount event must identify the newly mounted turn");
+
   const patchChanges = {
     "src/old.js": {
       type: "update",
@@ -260,6 +297,48 @@ async function checkMarkdownRendering() {
   assert.match(groupedExecHtml, /exec_command 2\/2/, "grouped exec must render its second nested command");
   assert.match(groupedExecHtml, /Patch diff, 2 files, \+3 -1/, "grouped exec must include its patch_apply_end diff");
   assert.doesNotMatch(groupedExecHtml, /\[object Object\]/, "grouped tool output must not stringify content blocks as object placeholders");
+
+  const quotedExecInput = 'const r = await tools.exec_command({"cmd":"printf real","workdir":"/repo"}); text(r.output);';
+  assert.deepEqual(
+    Array.from(rendererContext.__rolloutTest.parseExecCommandCalls(quotedExecInput), command => [command.command, command.workdir]),
+    [["printf real", "/repo"]],
+    "nested exec_command parsing must accept quoted JSON property names"
+  );
+  const plainExecOutput = [
+    { type: "input_text", text: "Script completed\nWall time 0.2 seconds\nOutput:\n" },
+    { type: "input_text", text: "real output\n" }
+  ];
+  assert.deepEqual(
+    Array.from(rendererContext.__rolloutTest.parseExecWrapperOutput(plainExecOutput).results, result => [result.output, result.wall_time_seconds]),
+    [["real output", 0.2]],
+    "plain exec wrapper blocks must normalize into the matching command result"
+  );
+  const plainExecRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 33, value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "call-plain-exec", status: "completed", input: quotedExecInput } } },
+    { line: 34, value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-plain-exec", output: plainExecOutput } } }
+  ]);
+  const plainExecHtml = rendererContext.__rolloutTest.renderToolCallGroup(plainExecRecords[0]);
+  assert.match(plainExecHtml, /printf real/, "plain wrapper output must keep the command text");
+  assert.match(plainExecHtml, /Output, 11 characters/, "plain wrapper output must attach stdout to the command card");
+  assert.doesNotMatch(plainExecHtml, /Command text unavailable|No output|Additional output/, "a matched plain exec result must not render fallback placeholders or duplicate output");
+
+  const nestedPlanInput = [
+    "const p = await tools.update_plan({explanation:\"Ready to verify.\",plan:[",
+    "  {step:\"Inspect\",status:\"completed\"},",
+    "  {step:\"Verify\",status:\"in_progress\"}",
+    "]}); text(p);"
+  ].join("\n");
+  const nestedPlans = rendererContext.__rolloutTest.parseNestedToolArguments(nestedPlanInput, "update_plan");
+  assert.equal(nestedPlans.length, 1, "nested update_plan arguments must be extracted from the exec wrapper");
+  assert.equal(nestedPlans[0].plan[1].status, "in_progress", "nested update_plan statuses must survive parsing");
+  const nestedPlanRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 35, value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "call-plan", status: "completed", input: nestedPlanInput } } },
+    { line: 36, value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-plan", output: [{ type: "input_text", text: "Script completed\nWall time 0.0 seconds\nOutput:\n" }, { type: "input_text", text: "{}" }] } } }
+  ]);
+  const nestedPlanHtml = rendererContext.__rolloutTest.renderToolCallGroup(nestedPlanRecords[0]);
+  assert.match(nestedPlanHtml, /Ready to verify\.[\s\S]*Inspect[\s\S]*Verify/, "nested update_plan must use the dedicated plan renderer");
+  assert.match(nestedPlanHtml, /rollout-plan-status-completed[\s\S]*rollout-plan-status-in-progress/, "nested update_plan must preserve status styling");
+  assert.doesNotMatch(nestedPlanHtml, /Raw exec input|Command text unavailable|No output/, "nested update_plan must not fall back to raw exec placeholders");
 
   const waitRecords = rendererContext.__rolloutTest.createRenderableRecords([
     { line: 40, value: { type: "response_item", payload: { type: "function_call", name: "wait", call_id: "call-wait", arguments: "{\"cell_id\":\"1\"}" } } },
@@ -345,8 +424,9 @@ async function checkMarkdownRendering() {
   assert.equal(targetNode.open, false, "sidebar navigation must leave the target main section collapsed");
   assert.equal(targetScrolls, 2, "sidebar navigation must scroll immediately and after layout");
   assert.equal(pushedHash, "#assistant-2", "sidebar navigation must update the URL hash");
+  const navigationOpenEvent = navigationEvents.find(event => event.type === "codex-rollout-navigation-open");
   assert.deepEqual(
-    Array.from(navigationEvents[0].detail.stateKeys),
+    Array.from(navigationOpenEvent.detail.stateKeys),
     ["turn-1:body"],
     "sidebar navigation must persist only the opened parent turn state"
   );
