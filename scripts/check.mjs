@@ -62,9 +62,9 @@ async function checkLocalHtml(fileName) {
   } catch (error) {
     throw new Error(`${fileName} boot script has invalid syntax: ${error.message}`);
   }
-  assert.doesNotMatch(bootScript, /currentRenderedUiState\s*\|\|\s*captureRenderedUiState/, "refresh persistence must capture mounted details instead of trusting only the event snapshot");
-  assert.match(bootScript, /mergeRenderedUiStateSnapshots\(currentRenderedUiState, observedState\)/, "captured details must preserve state for unmounted lazy sections");
-  assert.match(bootScript, /codex-rollout-lazy-mounted/, "lazy turn mounts must trigger a second saved-state application");
+  assert.match(bootScript, /node\.dataset\.rolloutLevel === "2"/, "level-two directories must be excluded from persisted UI state");
+  assert.match(bootScript, /node\.open = false;/, "restoring UI state must collapse level-two directories");
+  assert.match(bootScript, /\(\?:assistant\|compact\|post-compact\|activity\)-\\d\+:body/, "legacy level-two directory state must be discarded");
 }
 
 async function checkSynchronizedLocalHtmlCopy() {
@@ -80,7 +80,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, mergeRenderedUiStateSnapshots, openSidebarRolloutTarget, parseExecCommandCalls, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderLazyTurn, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, storeLazyRolloutContent };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, openSidebarRolloutTarget, parseExecCommandCalls, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -186,41 +186,7 @@ async function checkMarkdownRendering() {
     records: []
   }, {});
   assert.match(mainSectionHtml, /data-rollout-level="2"/, "main assistant sections must remain level two");
-  assert.match(mainSectionHtml, /data-rollout-state-key="assistant-2:body"/, "main assistant section state must remain persistent");
-
-  const mergedUiState = rendererContext.__rolloutTest.mergeRenderedUiStateSnapshots({
-    sourceId: "rollout.jsonl",
-    details: { "turn-1:body": true, "assistant-2:body": false, "assistant-unmounted:body": true },
-    diffModes: { "record-unmounted:patch-mode": "split" }
-  }, {
-    sourceId: "rollout.jsonl",
-    savedAt: 2,
-    details: { "turn-1:body": true, "assistant-2:body": true },
-    diffModes: { "record-mounted:patch-mode": "unified" }
-  });
-  assert.equal(mergedUiState.details["assistant-2:body"], true, "mounted level-two state must override a stale event snapshot before refresh");
-  assert.equal(mergedUiState.details["assistant-unmounted:body"], true, "unmounted lazy level-two state must survive refresh capture");
-  assert.equal(mergedUiState.diffModes["record-unmounted:patch-mode"], "split", "unmounted lazy diff state must survive refresh capture");
-
-  const mountedEvents = [];
-  rendererContext.CustomEvent = class {
-    constructor(type, options = {}) {
-      this.type = type;
-      this.detail = options.detail;
-    }
-  };
-  rendererContext.document = {
-    dispatchEvent: event => mountedEvents.push(event)
-  };
-  const stateLazyTurnBody = { childNodes: [], innerHTML: "" };
-  const stateLazyTurn = {
-    dataset: { rolloutLazyKey: rendererContext.__rolloutTest.storeLazyRolloutContent("level-two markup") },
-    querySelector: selector => selector === "[data-rollout-lazy-turn-body]" ? stateLazyTurnBody : null
-  };
-  rendererContext.__rolloutTest.renderLazyTurn(stateLazyTurn);
-  assert.equal(stateLazyTurnBody.innerHTML, "level-two markup", "lazy turn body must mount before state restoration runs");
-  assert.equal(mountedEvents[0]?.type, "codex-rollout-lazy-mounted", "lazy turn mount must announce that level-two state can be restored");
-  assert.equal(mountedEvents[0]?.detail?.root, stateLazyTurn, "lazy mount event must identify the newly mounted turn");
+  assert.doesNotMatch(mainSectionHtml, /data-rollout-state-key/, "level-two assistant sections must not persist their expanded state");
 
   const patchChanges = {
     "src/old.js": {

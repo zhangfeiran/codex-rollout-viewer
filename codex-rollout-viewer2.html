@@ -2070,23 +2070,6 @@ function isToolName(name, expected) {
   return new RegExp(`(^|[.])${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(String(name ?? ""));
 }
 
-function mergeRenderedUiStateSnapshots(baseState, observedState) {
-  if (!baseState || baseState.sourceId !== observedState?.sourceId) {
-    return observedState;
-  }
-  return {
-    ...observedState,
-    details: {
-      ...(baseState.details || {}),
-      ...(observedState.details || {})
-    },
-    diffModes: {
-      ...(baseState.diffModes || {}),
-      ...(observedState.diffModes || {})
-    }
-  };
-}
-
 function getPlanStatusMeta(status) {
   const normalized = String(status || "pending").toLowerCase().replace(/[\s-]+/g, "_");
   if (normalized === "completed") {
@@ -3617,7 +3600,7 @@ function renderParseErrors(errors) {
 
 function renderAssistantSection(section, context) {
   return `
-    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
         <span class="rollout-assistant-title">${escapeHtml(section.title)}</span>
         <span class="rollout-count">${formatNumber(section.records.length)}</span>
@@ -3641,7 +3624,7 @@ function renderCompactSection(section, context) {
     `${formatNumber(section.records.length)} events`
   ].filter(Boolean).join(" / ");
   return `
-    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
         <span class="rollout-compact-rule"></span>
         <span class="rollout-compact-title">${escapeHtml(section.title)}</span>
@@ -3781,9 +3764,6 @@ function renderLazyTurn(details) {
     return;
   }
   body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
-  document.dispatchEvent(new CustomEvent("codex-rollout-lazy-mounted", {
-    detail: { root: details }
-  }));
 }
 
 function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
@@ -3838,7 +3818,7 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
+    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
@@ -5668,7 +5648,11 @@ export async function renderLocalCodexRolloutDocument() {
 
     function sanitizeRenderedDetailsState(details) {
       return Object.fromEntries(
-        Object.entries(details || {}).filter(([key]) => !String(key).endsWith(":nav"))
+        Object.entries(details || {}).filter(([key]) => {
+          const normalized = String(key);
+          return !normalized.endsWith(":nav")
+            && !/^(?:assistant|compact|post-compact|activity)-\d+:body$/.test(normalized);
+        })
       );
     }
 
@@ -5690,7 +5674,7 @@ export async function renderLocalCodexRolloutDocument() {
     function captureRenderedUiState(source) {
       const details = {};
       document.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
-        if (node.closest(".rollout-sidebar")) {
+        if (node.closest(".rollout-sidebar") || node.dataset.rolloutLevel === "2") {
           return;
         }
         details[node.dataset.rolloutStateKey] = node.open;
@@ -5702,13 +5686,12 @@ export async function renderLocalCodexRolloutDocument() {
         }
         diffModes[node.dataset.rolloutStateKey] = getDiffMode(node);
       });
-      const observedState = {
+      return {
         sourceId: getSourceStateId(source),
         savedAt: Date.now(),
         details,
         diffModes
       };
-      return mergeRenderedUiStateSnapshots(currentRenderedUiState, observedState);
     }
 
     function applyDiffMode(diff, mode) {
@@ -5723,6 +5706,10 @@ export async function renderLocalCodexRolloutDocument() {
     function applySavedRenderedUiState(root = document) {
       root.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
         if (node.closest(".rollout-sidebar")) {
+          return;
+        }
+        if (node.dataset.rolloutLevel === "2") {
+          node.open = false;
           return;
         }
         const key = node.dataset.rolloutStateKey;
@@ -5780,8 +5767,13 @@ export async function renderLocalCodexRolloutDocument() {
     function persistRenderedUiStateSoon(source) {
       clearTimeout(persistRenderedUiStateSoon.timer);
       persistRenderedUiStateSoon.timer = setTimeout(() => {
-        currentRenderedUiState = captureRenderedUiState(source);
-        saveCurrentRolloutUiState(currentRenderedUiState);
+        if (currentRenderedUiState) {
+          currentRenderedUiState.savedAt = Date.now();
+          currentRenderedUiState.details = sanitizeRenderedDetailsState(currentRenderedUiState.details);
+          saveCurrentRolloutUiState(currentRenderedUiState);
+        } else {
+          saveCurrentRolloutUiState(captureRenderedUiState(source));
+        }
       }, 120);
     }
 
@@ -5805,28 +5797,9 @@ export async function renderLocalCodexRolloutDocument() {
         }
         persistRenderedUiStateSoon(currentRenderedSource);
       });
-      document.addEventListener("codex-rollout-lazy-mounted", event => {
-        if (!currentRenderedUiState || !event.detail?.root) {
-          return;
-        }
-        const wasRestoring = isRestoringRenderedUiState;
-        isRestoringRenderedUiState = true;
-        document.documentElement.dataset.rolloutRestoringState = "true";
-        try {
-          applySavedRenderedUiState(event.detail.root);
-        } finally {
-          if (!wasRestoring) {
-            isRestoringRenderedUiState = false;
-            delete document.documentElement.dataset.rolloutRestoringState;
-          }
-        }
-        document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
-          detail: { defer: true, kind: "content" }
-        }));
-      });
       document.addEventListener("toggle", event => {
         const node = event.target;
-        if (isRestoringRenderedUiState || !(node instanceof HTMLDetailsElement) || !node.dataset.rolloutStateKey || node.closest(".rollout-sidebar") || !currentRenderedSource) {
+        if (isRestoringRenderedUiState || !(node instanceof HTMLDetailsElement) || !node.dataset.rolloutStateKey || node.dataset.rolloutLevel === "2" || node.closest(".rollout-sidebar") || !currentRenderedSource) {
           return;
         }
         currentRenderedUiState ||= {
@@ -5904,8 +5877,7 @@ export async function renderLocalCodexRolloutDocument() {
     async function renderSource(source, options = {}) {
       if (currentRenderedSource) {
         clearTimeout(persistRenderedUiStateSoon.timer);
-        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
-        await saveCurrentRolloutUiState(currentRenderedUiState);
+        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
       }
       clearTimeout(persistRenderedUiStateSoon.timer);
       currentRenderedSource = null;
@@ -6019,8 +5991,7 @@ export async function renderLocalCodexRolloutDocument() {
       const source = currentRenderedSource;
       const backDirectoryId = source?.directoryId || selectedDirectoryEntry?.id || "";
       if (currentRenderedSource) {
-        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
-        await saveCurrentRolloutUiState(currentRenderedUiState);
+        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
         currentRenderedSource = null;
         currentRenderedUiState = null;
       }
@@ -6093,8 +6064,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     window.addEventListener("beforeunload", () => {
       if (currentRenderedSource) {
-        currentRenderedUiState = captureRenderedUiState(currentRenderedSource);
-        saveCurrentRolloutUiState(currentRenderedUiState);
+        saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
       }
     });
 

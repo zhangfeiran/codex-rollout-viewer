@@ -1671,23 +1671,6 @@ function isToolName(name, expected) {
   return new RegExp(`(^|[.])${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(String(name ?? ""));
 }
 
-function mergeRenderedUiStateSnapshots(baseState, observedState) {
-  if (!baseState || baseState.sourceId !== observedState?.sourceId) {
-    return observedState;
-  }
-  return {
-    ...observedState,
-    details: {
-      ...(baseState.details || {}),
-      ...(observedState.details || {})
-    },
-    diffModes: {
-      ...(baseState.diffModes || {}),
-      ...(observedState.diffModes || {})
-    }
-  };
-}
-
 function getPlanStatusMeta(status) {
   const normalized = String(status || "pending").toLowerCase().replace(/[\s-]+/g, "_");
   if (normalized === "completed") {
@@ -3218,7 +3201,7 @@ function renderParseErrors(errors) {
 
 function renderAssistantSection(section, context) {
   return `
-    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+    <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
         <span class="rollout-assistant-title">${escapeHtml(section.title)}</span>
         <span class="rollout-count">${formatNumber(section.records.length)}</span>
@@ -3242,7 +3225,7 @@ function renderCompactSection(section, context) {
     `${formatNumber(section.records.length)} events`
   ].filter(Boolean).join(" / ");
   return `
-    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+    <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
         <span class="rollout-compact-rule"></span>
         <span class="rollout-compact-title">${escapeHtml(section.title)}</span>
@@ -3382,9 +3365,6 @@ function renderLazyTurn(details) {
     return;
   }
   body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
-  document.dispatchEvent(new CustomEvent("codex-rollout-lazy-mounted", {
-    detail: { root: details }
-  }));
 }
 
 function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
@@ -3439,7 +3419,7 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
+    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
