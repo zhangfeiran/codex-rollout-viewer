@@ -77,7 +77,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, openSidebarRolloutTarget, parsePatchApplyEndChanges, renderAssistantSection, renderEvent, renderFunctionCall, renderMarkdownContent, renderSidebarGroup };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, openSidebarRolloutTarget, parseExecCommandCalls, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -216,6 +216,81 @@ async function checkMarkdownRendering() {
   assert.match(patchEndHtml, /Patch diff, 2 files, \+3 -1/, "patch_apply_end must render stats from its changes data");
   assert.match(patchEndHtml, /src\/old\.js -&gt; src\/new\.js/, "patch_apply_end must render move_path from its changes data");
 
+  const execInput = [
+    "const results = await Promise.all([",
+    "  tools.exec_command({ cmd: \"printf '{value}'\", workdir: \"/repo\" }),",
+    "  tools.exec_command({ cmd: \"git status --short\", workdir: \"/repo\" })",
+    "]);",
+    "await tools.apply_patch(\"*** Begin Patch\\n*** End Patch\");"
+  ].join("\n");
+  const execCallRecord = {
+    line: 30,
+    value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "call-exec", status: "completed", input: execInput } }
+  };
+  const execPatchRecord = {
+    line: 31,
+    value: { type: "event_msg", payload: { type: "patch_apply_end", call_id: "exec-internal", success: true, status: "completed", changes: patchChanges } }
+  };
+  const execOutputValue = [
+    { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+    { type: "input_text", text: JSON.stringify({ chunk_id: "one", wall_time_seconds: 0.01, exit_code: 0, original_token_count: 2, output: "{value}\n" }) },
+    { type: "input_text", text: JSON.stringify({ chunk_id: "two", wall_time_seconds: 0.02, exit_code: 1, original_token_count: 3, output: " M file.js\n" }) }
+  ];
+  const execOutputRecord = {
+    line: 32,
+    value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-exec", output: execOutputValue } }
+  };
+  const combinedExecRecords = rendererContext.__rolloutTest.createRenderableRecords([execCallRecord, execPatchRecord, execOutputRecord]);
+  assert.equal(combinedExecRecords.length, 1, "call, patch result, and call output must collapse into one render record");
+  assert.equal(combinedExecRecords[0].toolGroup.outputRecord.line, 32, "tool group must retain the matching call-id output");
+  assert.deepEqual(Array.from(combinedExecRecords[0].toolGroup.eventRecords, record => record.line), [31], "patch_apply_end must attach to its enclosing exec call");
+  const parsedExecCommands = rendererContext.__rolloutTest.parseExecCommandCalls(execInput);
+  assert.deepEqual(
+    Array.from(parsedExecCommands, command => [command.command, command.workdir]),
+    [["printf '{value}'", "/repo"], ["git status --short", "/repo"]],
+    "nested exec_command calls must preserve commands containing braces and workdirs"
+  );
+  assert.deepEqual(
+    Array.from(rendererContext.__rolloutTest.parseStructuredToolOutput(execOutputValue).results, result => result.exit_code),
+    [0, 1],
+    "structured exec results must be decoded from content blocks"
+  );
+  const groupedExecHtml = rendererContext.__rolloutTest.renderToolCallGroup(combinedExecRecords[0]);
+  assert.match(groupedExecHtml, /exec_command 1\/2/, "grouped exec must render its first nested command");
+  assert.match(groupedExecHtml, /exec_command 2\/2/, "grouped exec must render its second nested command");
+  assert.match(groupedExecHtml, /Patch diff, 2 files, \+3 -1/, "grouped exec must include its patch_apply_end diff");
+  assert.doesNotMatch(groupedExecHtml, /\[object Object\]/, "grouped tool output must not stringify content blocks as object placeholders");
+
+  const waitRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 40, value: { type: "response_item", payload: { type: "function_call", name: "wait", call_id: "call-wait", arguments: "{\"cell_id\":\"1\"}" } } },
+    { line: 41, value: { type: "response_item", payload: { type: "function_call_output", call_id: "call-wait", output: [{ type: "input_text", text: JSON.stringify({ session_id: 7, output: "done" }) }] } } }
+  ]);
+  assert.equal(waitRecords.length, 1, "generic function call and result must collapse into one render record");
+  assert.match(rendererContext.__rolloutTest.getReadableToolOutput(waitRecords[0].toolGroup.outputRecord.value.payload.output), /session 7[\s\S]*done/, "generic paired calls must decode result content");
+  assert.match(rendererContext.__rolloutTest.renderToolCallGroup(waitRecords[0]), /record-40:output/, "generic paired calls must render one lazy result inside the call card");
+  const settingsHtml = rendererContext.__rolloutTest.renderEvent({
+    line: 42,
+    value: { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { model: "gpt-test", reasoning_effort: "high", cwd: "/repo", collaboration_mode: { mode: "default", settings: { developer_instructions: "large hidden text" } } } } }
+  });
+  assert.match(settingsHtml, /gpt-test[\s\S]*high[\s\S]*\/repo/, "thread settings must show compact high-value fields");
+  assert.doesNotMatch(settingsHtml, /large hidden text/, "thread settings must omit duplicated developer instructions");
+  const taskCompleteHtml = rendererContext.__rolloutTest.renderEvent({
+    line: 43,
+    value: { type: "event_msg", payload: { type: "task_complete", duration_ms: 2000, time_to_first_token_ms: 500 } }
+  });
+  assert.match(taskCompleteHtml, /Duration[\s\S]*2s[\s\S]*First Token[\s\S]*500ms/, "task lifecycle events must show compact timing fields");
+  const timedTurnHtml = rendererContext.__rolloutTest.renderTurnGroup({
+    id: "turn-timed",
+    index: 1,
+    title: "Timed turn",
+    isPreamble: false,
+    records: [
+      { line: 50, value: { timestamp: "2026-07-17T00:00:00.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Question" }] } } },
+      { line: 51, value: { timestamp: "2026-07-17T00:00:02.000Z", type: "event_msg", payload: { type: "task_complete", duration_ms: 2000 } } }
+    ]
+  }, { callById: new Map() });
+  assert.match(timedTurnHtml, /rollout-turn-meta">\s*<span>2s<\/span>\s*<span>2 events<\/span>/, "turn duration must appear before event and call counts");
+
   class FakeDetailsElement {}
   let lazyTurnRendered = false;
   let targetScrolls = 0;
@@ -267,13 +342,13 @@ async function checkMarkdownRendering() {
   };
   assert.equal(rendererContext.__rolloutTest.openSidebarRolloutTarget(sidebarAnchor), true, "sidebar navigation must resolve a lazy main target");
   assert.equal(turnNode.open, true, "sidebar navigation must open the parent main turn");
-  assert.equal(targetNode.open, true, "sidebar navigation must open the target main section");
+  assert.equal(targetNode.open, false, "sidebar navigation must leave the target main section collapsed");
   assert.equal(targetScrolls, 2, "sidebar navigation must scroll immediately and after layout");
   assert.equal(pushedHash, "#assistant-2", "sidebar navigation must update the URL hash");
   assert.deepEqual(
     Array.from(navigationEvents[0].detail.stateKeys),
-    ["turn-1:body", "assistant-2:body"],
-    "sidebar navigation must persist both opened main-area state keys"
+    ["turn-1:body"],
+    "sidebar navigation must persist only the opened parent turn state"
   );
 }
 

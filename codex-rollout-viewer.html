@@ -930,6 +930,41 @@ body.codex-rollout-page {
   overflow-wrap: anywhere;
 }
 
+.rollout-tool-results {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rollout-exec-command {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--wh-rollout-border-muted);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.rollout-exec-command.is-error {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.045);
+}
+
+.rollout-exec-command-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-bottom: 7px;
+  color: var(--wh-rollout-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.rollout-exec-command-head span:last-child {
+  color: var(--wh-rollout-subtle);
+  font-weight: 500;
+}
+
 .rollout-text {
   min-width: 0;
   margin: 0;
@@ -1929,6 +1964,9 @@ function formatDuration(milliseconds) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) {
     return "";
   }
+  if (milliseconds < 1000) {
+    return `${Math.round(milliseconds)}ms`;
+  }
   const totalSeconds = Math.round(milliseconds / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -2295,6 +2333,18 @@ function getTimestampMilliseconds(record) {
   return Number.isNaN(time) ? null : time;
 }
 
+function getRecordsDurationMilliseconds(records) {
+  const timestamps = records.flatMap(record => [
+    record,
+    record.toolGroup?.outputRecord,
+    ...(record.toolGroup?.eventRecords || [])
+  ]).filter(Boolean).map(getTimestampMilliseconds).filter(value => value != null);
+  if (timestamps.length < 2) {
+    return null;
+  }
+  return Math.max(...timestamps) - Math.min(...timestamps);
+}
+
 function getSessionMeta(records) {
   return records.find(record => record.value?.type === "session_meta")?.value?.payload ?? null;
 }
@@ -2425,6 +2475,58 @@ function shouldDropRecord(record) {
   return payloadType === "reasoning" || payloadType === "token_count";
 }
 
+function combineToolCallRecords(records) {
+  const groupByCallId = new Map();
+  const replacementByRecord = new Map();
+  const consumedRecords = new Set();
+  const pendingGroups = [];
+
+  for (const record of records) {
+    const payload = record.value?.payload ?? {};
+    const payloadType = getPayloadType(record);
+    if (record.value?.type === "response_item" && isFunctionCallPayloadType(payloadType) && payload.call_id) {
+      const groupedRecord = {
+        ...record,
+        toolGroup: {
+          callRecord: record,
+          outputRecord: null,
+          eventRecords: []
+        }
+      };
+      groupByCallId.set(payload.call_id, groupedRecord.toolGroup);
+      replacementByRecord.set(record, groupedRecord);
+      pendingGroups.push(groupedRecord.toolGroup);
+      continue;
+    }
+    if (record.value?.type === "response_item" && isFunctionOutputPayloadType(payloadType) && payload.call_id) {
+      const group = groupByCallId.get(payload.call_id);
+      if (group) {
+        group.outputRecord = record;
+        consumedRecords.add(record);
+        const pendingIndex = pendingGroups.indexOf(group);
+        if (pendingIndex >= 0) {
+          pendingGroups.splice(pendingIndex, 1);
+        }
+      }
+      continue;
+    }
+    if (record.value?.type === "event_msg" && payloadType === "patch_apply_end") {
+      const group = [...pendingGroups].reverse().find(candidate => {
+        const callPayload = candidate.callRecord.value?.payload ?? {};
+        return isToolName(callPayload.name, "exec") && String(callPayload.input ?? callPayload.arguments ?? "").includes("apply_patch");
+      });
+      if (group) {
+        group.eventRecords.push(record);
+        consumedRecords.add(record);
+      }
+    }
+  }
+
+  return records
+    .filter(record => !consumedRecords.has(record))
+    .map(record => replacementByRecord.get(record) || record);
+}
+
 function createRenderableRecords(records) {
   const bestMessageByKey = new Map();
   for (const record of records) {
@@ -2442,7 +2544,7 @@ function createRenderableRecords(records) {
   }
 
   const seenMessages = new Set();
-  return records.filter(record => {
+  const filteredRecords = records.filter(record => {
     if (shouldDropRecord(record)) {
       return false;
     }
@@ -2459,6 +2561,7 @@ function createRenderableRecords(records) {
     seenMessages.add(key);
     return true;
   });
+  return combineToolCallRecords(filteredRecords);
 }
 
 function getCompactText(value) {
@@ -2531,26 +2634,191 @@ function isContextCompactFollowupRecord(record) {
     || payloadType === "context_compacted";
 }
 
+function getToolOutputTextBlocks(output) {
+  if (output == null) {
+    return [];
+  }
+  if (typeof output == "string") {
+    return [output];
+  }
+  return getContentBlocks(output).map(block => block.text);
+}
+
+function parseStructuredToolOutput(output) {
+  const textBlocks = getToolOutputTextBlocks(output);
+  const results = [];
+  const plainText = [];
+  for (const text of textBlocks) {
+    try {
+      const value = JSON.parse(text);
+      if (value && typeof value == "object" && !Array.isArray(value)
+        && ["chunk_id", "exit_code", "output", "wall_time_seconds", "session_id"].some(key => Object.prototype.hasOwnProperty.call(value, key))) {
+        results.push(value);
+        continue;
+      }
+    } catch {
+      // Preserve non-JSON output blocks as ordinary text.
+    }
+    if (String(text).trim()) {
+      plainText.push(String(text));
+    }
+  }
+  return { textBlocks, results, plainText };
+}
+
+function getReadableToolOutput(output) {
+  const parsed = parseStructuredToolOutput(output);
+  if (!parsed.results.length) {
+    return parsed.textBlocks.join("\n");
+  }
+  return parsed.results.map(result => {
+    const metadata = [
+      result.exit_code != null ? `exit ${result.exit_code}` : "",
+      result.wall_time_seconds != null ? `${formatDuration(Number(result.wall_time_seconds) * 1000)}` : "",
+      result.session_id != null ? `session ${result.session_id}` : ""
+    ].filter(Boolean).join(" / ");
+    const body = String(result.output ?? "");
+    return [metadata, body || (!metadata ? stringifyCompact(result) : "")].filter(Boolean).join("\n");
+  }).join("\n\n");
+}
+
 function getOutputExitCode(output) {
-  const match = String(output ?? "").match(/Process exited with code\s+(-?\d+)/i);
+  const parsed = parseStructuredToolOutput(output);
+  const exitCodes = parsed.results
+    .map(result => Number(result.exit_code))
+    .filter(Number.isFinite);
+  const failed = exitCodes.find(code => code !== 0);
+  if (failed != null) {
+    return failed;
+  }
+  if (exitCodes.length) {
+    return exitCodes[exitCodes.length - 1];
+  }
+  const match = parsed.textBlocks.join("\n").match(/Process exited with code\s+(-?\d+)/i);
   return match ? Number(match[1]) : null;
+}
+
+function extractBalancedObject(source, startIndex) {
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(startIndex, index + 1);
+      }
+    }
+  }
+  return "";
+}
+
+function decodeJsStringLiteral(literal) {
+  if (!literal || literal.length < 2) {
+    return "";
+  }
+  if (literal[0] === '"') {
+    try {
+      return JSON.parse(literal);
+    } catch {
+      // Fall through to the conservative escape decoder.
+    }
+  }
+  return literal.slice(1, -1).replace(/\\(n|r|t|\\|'|"|`)/g, (match, escaped) => ({
+    n: "\n",
+    r: "\r",
+    t: "\t",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "`": "`"
+  })[escaped] ?? match);
+}
+
+function readJsStringProperty(objectText, propertyName) {
+  const propertyPattern = new RegExp(`(?:^|[,{\\n])\\s*${propertyName}\\s*:\\s*`, "g");
+  const match = propertyPattern.exec(objectText);
+  if (!match) {
+    return "";
+  }
+  const start = match.index + match[0].length;
+  const quote = objectText[start];
+  if (quote !== '"' && quote !== "'" && quote !== "`") {
+    return "";
+  }
+  let escaped = false;
+  for (let index = start + 1; index < objectText.length; index += 1) {
+    const character = objectText[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === quote) {
+      return decodeJsStringLiteral(objectText.slice(start, index + 1));
+    }
+  }
+  return "";
+}
+
+function parseExecCommandCalls(input) {
+  const source = String(input ?? "");
+  const calls = [];
+  const invocationPattern = /tools\.(exec_command|shell_command)\s*\(/g;
+  let match = null;
+  while ((match = invocationPattern.exec(source))) {
+    const objectStart = source.indexOf("{", invocationPattern.lastIndex);
+    if (objectStart < 0) {
+      continue;
+    }
+    const objectText = extractBalancedObject(source, objectStart);
+    if (!objectText) {
+      continue;
+    }
+    calls.push({
+      tool: match[1],
+      command: readJsStringProperty(objectText, "cmd") || readJsStringProperty(objectText, "command"),
+      workdir: readJsStringProperty(objectText, "workdir")
+    });
+    invocationPattern.lastIndex = objectStart + objectText.length;
+  }
+  return calls;
 }
 
 function summarizeRecords(records, parseErrors) {
   const responseItems = records.filter(record => record.value?.type === "response_item");
   const calls = responseItems.filter(record => isFunctionCallPayloadType(record.value?.payload?.type));
-  const outputs = responseItems.filter(record => isFunctionOutputPayloadType(record.value?.payload?.type));
+  const outputs = [
+    ...responseItems.filter(record => isFunctionOutputPayloadType(record.value?.payload?.type)),
+    ...calls.map(record => record.toolGroup?.outputRecord).filter(Boolean)
+  ];
   const messageLikes = records.filter(isMessageLikeRecord);
-  const events = records.filter(record => record.value?.type === "event_msg");
+  const attachedEvents = calls.flatMap(record => record.toolGroup?.eventRecords || []);
+  const events = [...records.filter(record => record.value?.type === "event_msg"), ...attachedEvents];
   const turnIds = new Set(records.map(getTurnId).filter(Boolean));
   const timestamps = records.map(getTimestampMilliseconds).filter(value => value != null);
   const failedOutputs = outputs.filter(record => {
-    const output = String(record.value?.payload?.output ?? "");
-    const exitCode = getOutputExitCode(output);
+    const exitCode = getOutputExitCode(record.value?.payload?.output);
     return exitCode != null && exitCode !== 0;
   });
   return {
-    records: records.length,
+    records: records.length + outputs.filter(record => !records.includes(record)).length + attachedEvents.length,
     messages: messageLikes.length,
     calls: calls.length,
     outputs: outputs.length,
@@ -2693,6 +2961,13 @@ function summarizeGroup(group) {
     const payloadType = getPayloadType(record);
     if (isFunctionCallPayloadType(payloadType)) {
       counts.calls += 1;
+      if (record.toolGroup?.outputRecord) {
+        counts.outputs += 1;
+        const exitCode = getOutputExitCode(record.toolGroup.outputRecord.value?.payload?.output);
+        if (exitCode != null && exitCode !== 0) {
+          counts.failed += 1;
+        }
+      }
     } else if (isFunctionOutputPayloadType(payloadType)) {
       counts.outputs += 1;
       const exitCode = getOutputExitCode(record.value?.payload?.output);
@@ -2893,6 +3168,137 @@ function getCommandFromArguments(args) {
   return args.cmd ?? args.command ?? args.script ?? null;
 }
 
+function renderToolOutputDetails(output, record, suffix = "output", label = "Output") {
+  const text = getReadableToolOutput(output);
+  const exitCode = getOutputExitCode(output);
+  const summary = [
+    label,
+    exitCode != null ? `exit ${exitCode}` : "",
+    `${formatNumber(text.length)} characters`
+  ].filter(Boolean).join(", ");
+  return text
+    ? renderLazyCodeDetails(summary, text, "text", `record-${record.line}:${suffix}`)
+    : `<p class="rollout-empty">No output.</p>`;
+}
+
+function renderExecCommandPair(command, result, index, total, record) {
+  const commandText = String(command?.command ?? "");
+  const outputText = String(result?.output ?? "");
+  const exitCode = Number(result?.exit_code);
+  const hasExitCode = Number.isFinite(exitCode);
+  const meta = [
+    hasExitCode ? `exit ${exitCode}` : "",
+    result?.wall_time_seconds != null ? formatDuration(Number(result.wall_time_seconds) * 1000) : "",
+    result?.original_token_count != null ? `${formatNumber(result.original_token_count)} tokens` : ""
+  ].filter(Boolean).join(" / ");
+  const className = hasExitCode && exitCode !== 0 ? "is-error" : "";
+  const outputSummary = [
+    "Output",
+    hasExitCode ? `exit ${exitCode}` : "",
+    `${formatNumber(outputText.length)} characters`
+  ].filter(Boolean).join(", ");
+  return `
+    <section class="rollout-exec-command ${className}">
+      <div class="rollout-exec-command-head">
+        <span>${escapeHtml(command?.tool || "exec_command")} ${formatNumber(index + 1)}/${formatNumber(total)}</span>
+        <span>${escapeHtml(meta)}</span>
+      </div>
+      ${command?.workdir ? renderKeyValueList([["Workdir", command.workdir]]) : ""}
+      ${commandText
+        ? renderCollapsibleHtml("Command", renderCodeBlock(commandText, "shell"), commandText.length, 420, `record-${record.line}:command-${index}`)
+        : `<p class="rollout-empty">Command text unavailable.</p>`}
+      ${outputText
+        ? renderLazyCodeDetails(outputSummary, outputText, "text", `record-${record.line}:output-${index}`)
+        : `<p class="rollout-empty">No output.</p>`}
+    </section>
+  `;
+}
+
+function renderAttachedPatchEvent(patchRecord) {
+  const payload = patchRecord.value?.payload ?? {};
+  return `
+    <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""}">
+      <div class="rollout-exec-command-head">
+        <span>patch_apply</span>
+        <span>${escapeHtml([payload.status, payload.success === false ? "failed" : payload.success === true ? "success" : ""].filter(Boolean).join(" / "))}</span>
+      </div>
+      ${renderPatchApplyEndDiff(payload.changes, patchRecord)}
+      ${payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${patchRecord.line}:stderr`) : ""}
+    </section>
+  `;
+}
+
+function renderExecToolGroup(record) {
+  const group = record.toolGroup;
+  const callPayload = group.callRecord.value?.payload ?? {};
+  const outputPayload = group.outputRecord?.value?.payload ?? {};
+  const input = String(callPayload.input ?? callPayload.arguments ?? "");
+  const commands = parseExecCommandCalls(input);
+  const parsedOutput = parseStructuredToolOutput(outputPayload.output);
+  const total = Math.max(commands.length, parsedOutput.results.length);
+  const pairs = Array.from({ length: total }, (unused, index) =>
+    renderExecCommandPair(commands[index], parsedOutput.results[index], index, total, record)
+  );
+  const patches = group.eventRecords.map(renderAttachedPatchEvent);
+  const supplementalOutput = parsedOutput.plainText
+    .filter(text => !/^Script (?:completed|running)\b/i.test(text.trim()) && !/^(?:\{\}|\[\])$/.test(text.trim()))
+    .join("\n");
+  const failed = parsedOutput.results.some(result => Number(result.exit_code) !== 0)
+    || group.eventRecords.some(eventRecord => eventRecord.value?.payload?.success === false);
+  const body = [
+    renderKeyValueList([
+      ["Tool", callPayload.name || "exec"],
+      ["Call ID", callPayload.call_id],
+      ["Status", callPayload.status],
+      ["Commands", commands.length || null],
+      ["Patches", patches.length || null]
+    ]),
+    pairs.length ? `<div class="rollout-tool-results">${pairs.join("")}</div>` : "",
+    patches.length ? `<div class="rollout-tool-results">${patches.join("")}</div>` : "",
+    supplementalOutput ? renderLazyCodeDetails("Additional output", supplementalOutput, "text", `record-${record.line}:additional-output`) : "",
+    !commands.length ? renderLazyCodeDetails("Raw exec input", input, "javascript", `record-${record.line}:raw-input`) : ""
+  ].filter(Boolean).join("\n");
+  const title = [
+    "exec",
+    commands.length ? `${formatNumber(commands.length)} command${commands.length === 1 ? "" : "s"}` : "",
+    patches.length ? `${formatNumber(patches.length)} patch${patches.length === 1 ? "" : "es"}` : ""
+  ].filter(Boolean).join(" / ");
+  return renderEntry(record, "tool", title, body, {
+    kind: "tool-call",
+    className: failed ? "is-error" : "",
+    roleClass: failed ? "rollout-role-error" : "rollout-role-tool"
+  });
+}
+
+function renderToolCallGroup(record) {
+  const group = record.toolGroup;
+  const payload = group.callRecord.value?.payload ?? {};
+  if (isToolName(payload.name, "exec")) {
+    return renderExecToolGroup(record);
+  }
+  const argsSource = payload.arguments ?? payload.input ?? "";
+  const args = parseArguments(argsSource);
+  const argsText = typeof args == "string" ? args : stringifyCompact(args);
+  const output = group.outputRecord?.value?.payload?.output;
+  const exitCode = getOutputExitCode(output);
+  const failed = exitCode != null && exitCode !== 0;
+  const body = [
+    renderKeyValueList([
+      ["Tool", payload.name],
+      ["Call ID", payload.call_id],
+      ["Status", payload.status],
+      ["Exit Code", exitCode]
+    ]),
+    argsText ? renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`) : "",
+    group.outputRecord ? renderToolOutputDetails(output, record) : `<p class="rollout-empty">No matching result.</p>`
+  ].filter(Boolean).join("\n");
+  return renderEntry(record, "tool", payload.name || "function call", body, {
+    kind: "tool-call",
+    className: failed ? "is-error" : "",
+    roleClass: failed ? "rollout-role-error" : "rollout-role-tool"
+  });
+}
+
 function renderFunctionCall(record) {
   const payload = record.value?.payload ?? {};
   const argsSource = payload.arguments ?? payload.input ?? "";
@@ -2919,8 +3325,8 @@ function renderFunctionCall(record) {
 
 function renderFunctionOutput(record, callById) {
   const payload = record.value?.payload ?? {};
-  const output = String(payload.output ?? "");
-  const exitCode = getOutputExitCode(output);
+  const output = getReadableToolOutput(payload.output);
+  const exitCode = getOutputExitCode(payload.output);
   const call = callById.get(payload.call_id);
   const title = `output: ${call?.name || payload.call_id || "function call"}`;
   const className = exitCode != null && exitCode !== 0 ? "is-error" : "";
@@ -2964,6 +3370,21 @@ function renderEvent(record) {
       roleClass: payload.success === false ? "rollout-role-error" : "rollout-role-event"
     });
   }
+  if (payload.type === "thread_settings_applied") {
+    const settings = payload.thread_settings ?? {};
+    return renderEntry(record, "event", payload.type, renderKeyValueList([
+      ["Model", settings.model],
+      ["Provider", settings.model_provider_id],
+      ["Reasoning", settings.reasoning_effort],
+      ["Tier", settings.service_tier],
+      ["Approval", settings.approval_policy],
+      ["Permission", settings.permission_profile?.type],
+      ["Mode", settings.collaboration_mode?.mode],
+      ["CWD", settings.cwd]
+    ]), {
+      kind: "event"
+    });
+  }
   const text = payload.message || payload.text || payload.reason || "";
   const body = text
     ? renderCollapsibleHtml(payload.type || "event", renderMarkdownContent(text), String(text).length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:event`)
@@ -2972,7 +3393,9 @@ function renderEvent(record) {
       ["Turn", payload.turn_id],
       ["Mode", payload.collaboration_mode_kind],
       ["Started", payload.started_at],
-      ["Duration", payload.duration_ms != null ? formatDuration(payload.duration_ms) : null]
+      ["Duration", payload.duration_ms != null ? formatDuration(payload.duration_ms) : null],
+      ["First Token", payload.time_to_first_token_ms != null ? formatDuration(payload.time_to_first_token_ms) : null],
+      ["Context Window", payload.model_context_window != null ? formatNumber(payload.model_context_window) : null]
     ]);
   return renderEntry(record, "event", payload.type || record.value?.type || "event", body, {
     kind: "event"
@@ -3070,7 +3493,7 @@ function renderRecord(record, context) {
     return renderMessage(record);
   }
   if (isFunctionCallPayloadType(payloadType)) {
-    return renderFunctionCall(record);
+    return record.toolGroup ? renderToolCallGroup(record) : renderFunctionCall(record);
   }
   if (isFunctionOutputPayloadType(payloadType)) {
     return renderFunctionOutput(record, context.callById);
@@ -3149,10 +3572,12 @@ function renderGroupSection(section, context) {
 
 function renderTurnGroup(group, context) {
   const counts = summarizeGroup(group);
+  const duration = getRecordsDurationMilliseconds(group.records);
   const title = group.isPreamble ? "Preamble" : group.title;
   const sections = buildGroupSections(group);
   const lazyBodyKey = storeLazyRolloutContent(sections.map(section => renderGroupSection(section, context)).join(""));
   const meta = [
+    duration != null ? formatDuration(duration) : "",
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
     counts.calls ? `${formatNumber(counts.calls)} calls` : "",
@@ -3353,10 +3778,7 @@ function openSidebarRolloutTarget(anchor) {
   if (!target) {
     return false;
   }
-  if (target instanceof HTMLDetailsElement) {
-    target.open = true;
-  }
-  const stateKeys = [turn, target]
+  const stateKeys = [turn]
     .filter(node => node instanceof HTMLDetailsElement && node.dataset.rolloutStateKey)
     .map(node => node.dataset.rolloutStateKey);
   document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", {
