@@ -1690,85 +1690,46 @@ function renderUpdatePlanMarkdown(args) {
   return `<div class="markdown-lite rollout-plan-markdown">${explanationHtml}${planHtml}</div>`;
 }
 
-function getApplyPatchText(payload, args) {
-  const toolName = String(payload?.name ?? "");
-  if (!isToolName(toolName, "apply_patch")) {
-    return null;
-  }
-  if (typeof payload?.input == "string" && payload.input.includes("*** Begin Patch")) {
-    return payload.input;
-  }
-  if (typeof args == "string") {
-    return args;
-  }
-  if (!args || typeof args != "object" || Array.isArray(args)) {
-    return typeof payload?.arguments == "string" ? payload.arguments : null;
-  }
-  for (const key of ["patch", "input", "text", "command"]) {
-    if (typeof args[key] == "string" && args[key].includes("*** Begin Patch")) {
-      return args[key];
-    }
-  }
-  return typeof payload?.arguments == "string" && payload.arguments.includes("*** Begin Patch")
-    ? payload.arguments
-    : null;
-}
-
-function parseApplyPatch(patchText) {
-  const files = [];
-  let current = null;
-  let inPatch = false;
-  for (const rawLine of String(patchText ?? "").replace(/\r\n/g, "\n").split("\n")) {
-    if (rawLine === "*** Begin Patch") {
-      inPatch = true;
-      continue;
-    }
-    if (!inPatch || rawLine === "*** End Patch") {
-      continue;
-    }
-    const fileMatch = rawLine.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/);
-    if (fileMatch) {
-      current = {
-        path: fileMatch[1],
-        lines: [],
-        additions: 0,
-        deletions: 0
-      };
-      files.push(current);
-      continue;
-    }
-    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/);
-    if (moveMatch && current) {
-      current.moveTo = moveMatch[1];
-      current.lines.push({
-        type: "meta",
-        text: rawLine
-      });
-      continue;
-    }
-    if (!current) {
-      continue;
-    }
+function parseUnifiedDiffLines(diffText) {
+  const lines = [];
+  let additions = 0;
+  let deletions = 0;
+  for (const rawLine of String(diffText ?? "").replace(/\r\n/g, "\n").split("\n")) {
     let type = "context";
     let text = rawLine;
     if (rawLine.startsWith("@@")) {
       type = "hunk";
+    } else if (rawLine.startsWith("+++ ") || rawLine.startsWith("--- ") || rawLine.startsWith("\\ No newline")) {
+      type = "meta";
     } else if (rawLine.startsWith("+")) {
       type = "add";
       text = rawLine.slice(1);
-      current.additions += 1;
+      additions += 1;
     } else if (rawLine.startsWith("-")) {
       type = "delete";
       text = rawLine.slice(1);
-      current.deletions += 1;
+      deletions += 1;
     } else if (rawLine.startsWith(" ")) {
       text = rawLine.slice(1);
-    } else if (rawLine.startsWith("***")) {
-      type = "meta";
     }
-    current.lines.push({ type, text });
+    lines.push({ type, text });
   }
-  return files;
+  return { lines, additions, deletions };
+}
+
+function parsePatchApplyEndChanges(changes) {
+  if (!changes || typeof changes != "object" || Array.isArray(changes)) {
+    return [];
+  }
+  return Object.entries(changes).map(([path, change]) => {
+    const parsed = parseUnifiedDiffLines(change?.unified_diff);
+    return {
+      path,
+      moveTo: change?.move_path || null,
+      changeType: change?.type || "update",
+      ...parsed
+    };
+  });
 }
 
 function getPatchStats(files) {
@@ -1900,8 +1861,7 @@ function renderPatchFileShell(file, index, record) {
   `;
 }
 
-function renderApplyPatchDiff(patchText, record) {
-  const files = parseApplyPatch(patchText);
+function renderPatchFiles(files, record) {
   if (!files.length) {
     return "";
   }
@@ -1921,6 +1881,10 @@ function renderApplyPatchDiff(patchText, record) {
       </div>
     </details>
   `;
+}
+
+function renderPatchApplyEndDiff(changes, record) {
+  return renderPatchFiles(parsePatchApplyEndChanges(changes), record);
 }
 
 function getTimestampMilliseconds(record) {
@@ -2160,7 +2124,12 @@ function isContextCompactRecord(record) {
 }
 
 function isContextCompactFollowupRecord(record) {
-  return record.value?.type === "turn_context" || getPayloadType(record) === "context_compacted";
+  const recordType = record.value?.type;
+  const payloadType = getPayloadType(record);
+  return recordType === "world_state"
+    || recordType === "turn_context"
+    || payloadType === "token_count"
+    || payloadType === "context_compacted";
 }
 
 function getOutputExitCode(output) {
@@ -2379,7 +2348,7 @@ function buildGroupSections(group) {
       continue;
     }
 
-    if (currentCompactSection && isContextCompactFollowupRecord(record)) {
+    if (currentCompactSection && !currentActivitySection && isContextCompactFollowupRecord(record)) {
       currentCompactSection.records.push(record);
       continue;
     }
@@ -2474,20 +2443,7 @@ function renderSidebarGroup(group, callById) {
 
 function renderSidebarAssistantSection(section, callById) {
   const title = section.navTitle || section.title;
-  const children = section.records
-    .slice(1)
-    .map(record => `<a href="#record-${record.line}">${escapeHtml(getRecordTitle(record, callById))}</a>`)
-    .join("");
-  const lazyChildrenKey = storeLazyRolloutContent(children);
-  return `
-    <details data-rollout-level="2" data-rollout-nav-target="${escapeAttribute(section.id)}" data-rollout-lazy-sidebar data-rollout-lazy-key="${escapeAttribute(lazyChildrenKey)}">
-      <summary><span class="rollout-nav-label">${escapeHtml(title)}</span></summary>
-      <div class="rollout-tree-children">
-        <a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>
-        <span data-rollout-lazy-sidebar-body></span>
-      </div>
-    </details>
-  `;
+  return `<a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>`;
 }
 
 function renderEntry(record, role, title, body, options = {}) {
@@ -2515,7 +2471,8 @@ function renderMessage(record) {
   const phase = payload.phase ? `phase: ${payload.phase}` : "";
   const blocks = getMessageBlocks(record);
   const text = getMessageText(record);
-  const shouldCollapse = role === "developer" || role === "system" || text.length > LONG_MESSAGE_COLLAPSE_LENGTH;
+  const shouldCollapse = role !== "assistant"
+    && (role === "developer" || role === "system" || text.length > LONG_MESSAGE_COLLAPSE_LENGTH);
   const body = blocks.length ? blocks.map(block => `
     <div class="rollout-content-block">
       ${blocks.length > 1 ? `<p class="rollout-content-label">${escapeHtml(block.type)}</p>` : ""}
@@ -2544,7 +2501,6 @@ function renderFunctionCall(record) {
   const command = getCommandFromArguments(args);
   const argsText = typeof args == "string" ? args : stringifyCompact(args);
   const commandText = String(command ?? "");
-  const patchText = getApplyPatchText(payload, args);
   const updatePlanMarkdown = isToolName(payload.name, "update_plan") ? renderUpdatePlanMarkdown(args) : "";
   const body = [
     renderKeyValueList([
@@ -2552,10 +2508,9 @@ function renderFunctionCall(record) {
       ["Call ID", payload.call_id],
       ["Workdir", args && typeof args == "object" && !Array.isArray(args) ? args.workdir : null]
     ]),
-    patchText ? renderApplyPatchDiff(patchText, record) : "",
     updatePlanMarkdown,
     command ? renderCollapsibleHtml("Command", renderCodeBlock(commandText, "shell"), commandText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:command`) : "",
-    patchText ? renderLazyCodeDetails("Raw arguments", args, "json", `record-${record.line}:raw-arguments`) : updatePlanMarkdown ? "" : command ? renderDetails("Arguments", args, "json", `record-${record.line}:arguments`) : renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`)
+    updatePlanMarkdown ? "" : command ? renderDetails("Arguments", args, "json", `record-${record.line}:arguments`) : renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`)
   ].filter(Boolean).join("\n");
   return renderEntry(record, "tool", payload.name || "function call", body, {
     kind: "tool-call",
@@ -2591,6 +2546,24 @@ function renderEvent(record) {
   const payload = record.value?.payload ?? {};
   if (payload.type === "agent_message" || payload.type === "user_message") {
     return renderMessage(record);
+  }
+  if (payload.type === "patch_apply_end") {
+    const body = [
+      renderKeyValueList([
+        ["Type", payload.type],
+        ["Call ID", payload.call_id],
+        ["Turn", payload.turn_id],
+        ["Status", payload.status],
+        ["Success", payload.success]
+      ]),
+      renderPatchApplyEndDiff(payload.changes, record),
+      payload.stdout ? renderLazyCodeDetails("stdout", payload.stdout, "text", `record-${record.line}:stdout`) : "",
+      payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${record.line}:stderr`) : ""
+    ].filter(Boolean).join("\n");
+    return renderEntry(record, "event", payload.type, body, {
+      kind: "patch-apply-end",
+      roleClass: payload.success === false ? "rollout-role-error" : "rollout-role-event"
+    });
   }
   const text = payload.message || payload.text || payload.reason || "";
   const body = text
@@ -2891,34 +2864,21 @@ function renderLazyTurn(details) {
   body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
 }
 
-function renderLazySidebar(details) {
-  const body = details.querySelector("[data-rollout-lazy-sidebar-body]");
-  if (!body || body.childNodes.length) {
-    return;
-  }
-  body.innerHTML = lazyRolloutContentStore.get(details.dataset.rolloutLazyKey) || "";
-}
-
 function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
   const nodes = [
-    ...document.querySelectorAll("details[open][data-rollout-lazy-sidebar], details[open][data-rollout-lazy-turn], details[open][data-rollout-lazy-code], details[open][data-rollout-lazy-diff-file]")
+    ...document.querySelectorAll("details[open][data-rollout-lazy-turn], details[open][data-rollout-lazy-code], details[open][data-rollout-lazy-diff-file]")
   ].filter(node => {
     if (kind === "turn" && !node.matches("[data-rollout-lazy-turn]")) {
       return false;
     }
-    if (kind === "sidebar" && !node.matches("[data-rollout-lazy-sidebar]")) {
+    if (kind === "content" && node.matches("[data-rollout-lazy-turn]")) {
       return false;
     }
-    if (kind === "content" && (node.matches("[data-rollout-lazy-turn]") || node.matches("[data-rollout-lazy-sidebar]"))) {
-      return false;
-    }
-    const body = node.querySelector("[data-rollout-lazy-sidebar-body], [data-rollout-lazy-turn-body], [data-rollout-lazy-code-body], [data-rollout-diff-file-body]");
+    const body = node.querySelector("[data-rollout-lazy-turn-body], [data-rollout-lazy-code-body], [data-rollout-diff-file-body]");
     return body && !body.childNodes.length;
   });
   const renderNode = node => {
-    if (node.matches("[data-rollout-lazy-sidebar]")) {
-      renderLazySidebar(node);
-    } else if (node.matches("[data-rollout-lazy-turn]")) {
+    if (node.matches("[data-rollout-lazy-turn]")) {
       renderLazyTurn(node);
     } else if (node.matches("[data-rollout-lazy-code]")) {
       renderLazyCodeDetailsNode(node);
@@ -2971,6 +2931,50 @@ function setRolloutDirectoryLevel(mode) {
   }
 }
 
+function openSidebarRolloutTarget(anchor) {
+  const href = anchor?.getAttribute("href") || "";
+  if (!href.startsWith("#") || href.length <= 1) {
+    return false;
+  }
+  let targetId = href.slice(1);
+  try {
+    targetId = decodeURIComponent(targetId);
+  } catch {
+    // Keep the literal hash target when it is not URI encoded.
+  }
+  const sidebarGroup = anchor.closest('.rollout-tree details[data-rollout-level="1"][data-rollout-nav-target]');
+  const turn = sidebarGroup
+    ? document.getElementById(sidebarGroup.dataset.rolloutNavTarget || "")
+    : null;
+  if (turn instanceof HTMLDetailsElement) {
+    turn.open = true;
+    renderLazyTurn(turn);
+  }
+  const target = document.getElementById(targetId);
+  if (!target) {
+    return false;
+  }
+  if (target instanceof HTMLDetailsElement) {
+    target.open = true;
+  }
+  const stateKeys = [turn, target]
+    .filter(node => node instanceof HTMLDetailsElement && node.dataset.rolloutStateKey)
+    .map(node => node.dataset.rolloutStateKey);
+  document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", {
+    detail: { stateKeys }
+  }));
+  try {
+    history.pushState(null, "", `#${encodeURIComponent(targetId)}`);
+  } catch {
+    location.hash = targetId;
+  }
+  const scroll = () => target.scrollIntoView({ behavior: "auto", block: "start" });
+  scroll();
+  requestAnimationFrame(scroll);
+  enhanceRenderedContent();
+  return true;
+}
+
 function initRolloutControls() {
   document.querySelector("[data-rollout-collapse-all]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("collapse");
@@ -3003,12 +3007,14 @@ function initRolloutControls() {
     if (details.matches("[data-rollout-lazy-turn]")) {
       renderLazyTurn(details);
     }
-    if (details.matches("[data-rollout-lazy-sidebar]")) {
-      renderLazySidebar(details);
-    }
     enhanceRenderedContent();
   }, true);
   document.addEventListener("click", event => {
+    const navLink = event.target.closest('.rollout-tree a[href^="#"]');
+    if (navLink && openSidebarRolloutTarget(navLink)) {
+      event.preventDefault();
+      return;
+    }
     const button = event.target.closest("[data-rollout-diff-mode]");
     if (!button) {
       return;

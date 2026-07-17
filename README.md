@@ -10,6 +10,12 @@ https://zhangfeiran.github.io/codex-rollout-viewer/
 
 Open the page in Chrome, then use `Add sessions folder` to remember one or more `.codex/sessions` folders, choose a remembered folder from `Sessions folders`, use `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded. Browsers do not expose absolute folder paths to the page, so remembered folders can store an editable display path.
 
+For a second hosted viewer with independent current rollout, current view, expanded/collapsed state, and render cache, use:
+
+https://zhangfeiran.github.io/codex-rollout-viewer/codex-rollout-viewer2/
+
+The remembered sessions-folder list remains shared so the same authorized folders are available from both hosted paths.
+
 ## Local HTML
 
 For local/offline use, open `codex-rollout-viewer.html` or `codex-rollout-viewer2.html` in Chrome.
@@ -27,6 +33,6 @@ npm run export:pages
 npm run check
 ```
 
-The export synchronizes `codex-rollout-viewer2.html` and assembles `index.html` plus the Highlight.js and KaTeX assets in the system temporary directory. The repository no longer keeps a generated `pages/` copy. The GitHub Actions workflow in `.github/workflows/pages.yml` uploads that temporary artifact when `main` is pushed.
+The export synchronizes `codex-rollout-viewer2.html` and assembles both `index.html` and `codex-rollout-viewer2/index.html`, with path-local Highlight.js and KaTeX assets, in the system temporary directory. The repository no longer keeps a generated `pages/` copy. The GitHub Actions workflow in `.github/workflows/pages.yml` uploads that temporary artifact when `main` is pushed.
 
 In the GitHub repository settings, configure Pages to use **GitHub Actions** as the source. If the workflow fails with `Get Pages site failed ... Not Found`, Pages has not been enabled for the repository yet.
