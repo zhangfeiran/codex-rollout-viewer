@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codex Rollout Viewer</title>
-  <style>
+  <style id="standalone-viewer-style">
     :root {
       color-scheme: dark;
       --standalone-bg: #0b0f14;
@@ -126,6 +126,141 @@
 
     button.standalone-file-button {
       font: inherit;
+    }
+
+    .standalone-workspace-bar {
+      position: sticky;
+      z-index: 30;
+      top: 0;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 38px;
+      padding: 5px 8px;
+      color: #97a3b0;
+      background: #0b1016;
+      border-bottom: 1px solid #242c36;
+      font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    }
+
+    .standalone-workspace-tabs {
+      display: flex;
+      flex: 1 1 auto;
+      gap: 4px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+
+    .standalone-workspace-tab {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      max-width: 280px;
+      color: #aeb8c4;
+      background: #10161d;
+      border: 1px solid #303844;
+      border-radius: 6px;
+    }
+
+    .standalone-workspace-tab.is-active {
+      color: #f0f5fb;
+      background: #17202a;
+      border-color: #4a78a8;
+    }
+
+    .standalone-workspace-tab.is-error {
+      border-color: #a75d5d;
+    }
+
+    .standalone-workspace-tab-button,
+    .standalone-workspace-tab-close,
+    .standalone-workspace-action {
+      min-height: 26px;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .standalone-workspace-tab-button {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+      padding: 3px 8px;
+    }
+
+    .standalone-workspace-tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .standalone-workspace-tab-status {
+      inline-size: 7px;
+      block-size: 7px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: #647181;
+    }
+
+    .standalone-workspace-tab.has-updates .standalone-workspace-tab-status {
+      background: #5ea6ee;
+      box-shadow: 0 0 0 2px rgba(94, 166, 238, 0.16);
+    }
+
+    .standalone-workspace-tab.is-refreshing .standalone-workspace-tab-status {
+      background: #d5a94e;
+    }
+
+    .standalone-workspace-tab.is-error .standalone-workspace-tab-status {
+      background: #df7777;
+    }
+
+    .standalone-workspace-tab-close {
+      padding: 2px 7px;
+      color: #778391;
+      border-left: 1px solid #303844;
+    }
+
+    .standalone-workspace-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .standalone-workspace-action,
+    .standalone-workspace-auto-refresh {
+      min-height: 28px;
+      padding: 3px 7px;
+      color: #dce5ef;
+      background: #10161d;
+      border: 1px solid #303844;
+      border-radius: 5px;
+      font: inherit;
+    }
+
+    .standalone-workspace-action:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    .standalone-workspace-auto-refresh {
+      max-width: 92px;
+    }
+
+    @media (max-width: 760px) {
+      .standalone-workspace-bar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .standalone-workspace-actions {
+        overflow-x: auto;
+      }
     }
 
     .standalone-index-shell {
@@ -4179,6 +4314,10 @@ export async function renderLocalCodexRolloutDocument() {
     const LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
     const CURRENT_ROLLOUT_RENDER_CACHE_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
     const RENDER_CACHE_VERSION = 1;
+    const WORKSPACE_SLOTS_KEY = createScopedStorageKey("workspace-slots-v1");
+    const ACTIVE_WORKSPACE_SLOT_KEY = createScopedStorageKey("active-workspace-slot-v1");
+    const DEFAULT_WORKSPACE_SLOT_ID = "default";
+    const AUTO_REFRESH_INTERVALS = [0, 2000, 5000, 10000, 30000];
 
     let savedDirectoryEntries = [];
     let selectedDirectoryEntry = null;
@@ -4189,6 +4328,12 @@ export async function renderLocalCodexRolloutDocument() {
     let currentRenderedUiState = null;
     let isRestoringRenderedUiState = false;
     let renderedUiStatePersistenceInstalled = false;
+    let workspaceSlots = [];
+    let activeWorkspaceSlotId = DEFAULT_WORKSPACE_SLOT_ID;
+    let workspaceInitialized = false;
+    let workspaceRefreshTimer = null;
+    let workspaceNavigationVersion = 0;
+    const workspaceRefreshes = new Map();
     let indexSort = {
       key: "modified",
       direction: "desc"
@@ -4247,6 +4392,162 @@ export async function renderLocalCodexRolloutDocument() {
       }
     }
 
+    function createWorkspaceSlotStorageKey(key, slotId = activeWorkspaceSlotId) {
+      return createScopedStorageKey(`${key}::slot:${slotId || DEFAULT_WORKSPACE_SLOT_ID}`);
+    }
+
+    function createWorkspaceSlotId() {
+      if (globalThis.crypto?.randomUUID) {
+        return globalThis.crypto.randomUUID();
+      }
+      return `slot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+    }
+
+    function normalizeWorkspaceSlot(slot, index = 0) {
+      const createdAt = Number.isFinite(slot?.createdAt) ? slot.createdAt : Date.now();
+      const autoRefreshMs = AUTO_REFRESH_INTERVALS.includes(Number(slot?.autoRefreshMs))
+        ? Number(slot.autoRefreshMs)
+        : 0;
+      return {
+        id: String(slot?.id || (index === 0 ? DEFAULT_WORKSPACE_SLOT_ID : createWorkspaceSlotId())),
+        label: String(slot?.label || (index === 0 ? "Default" : `Session ${index + 1}`)),
+        sourceId: String(slot?.sourceId || ""),
+        createdAt,
+        lastOpenedAt: Number.isFinite(slot?.lastOpenedAt) ? slot.lastOpenedAt : createdAt,
+        lastRefreshedAt: Number.isFinite(slot?.lastRefreshedAt) ? slot.lastRefreshedAt : 0,
+        nextRefreshAt: Number.isFinite(slot?.nextRefreshAt) ? slot.nextRefreshAt : 0,
+        autoRefreshMs,
+        hasUpdates: Boolean(slot?.hasUpdates),
+        refreshState: ["idle", "refreshing", "error"].includes(slot?.refreshState) ? slot.refreshState : "idle",
+        refreshMessage: String(slot?.refreshMessage || "")
+      };
+    }
+
+    function getWorkspaceSlot(id = activeWorkspaceSlotId) {
+      return workspaceSlots.find(slot => slot.id === id) || null;
+    }
+
+    function getRequestedWorkspaceSlotId() {
+      try {
+        return new URL(location.href).searchParams.get("slot") || "";
+      } catch {
+        return "";
+      }
+    }
+
+    function getLocallyActiveWorkspaceSlotId() {
+      try {
+        return localStorage.getItem(ACTIVE_WORKSPACE_SLOT_KEY) || "";
+      } catch {
+        return "";
+      }
+    }
+
+    async function saveWorkspaceSlots(options = {}) {
+      await putStoredValue(WORKSPACE_SLOTS_KEY, workspaceSlots.map(slot => ({ ...slot, refreshState: slot.refreshState === "refreshing" ? "idle" : slot.refreshState })));
+      if (options.render !== false) {
+        installWorkspaceBar();
+      }
+    }
+
+    async function setActiveWorkspaceSlotId(id, options = {}) {
+      const slot = getWorkspaceSlot(id);
+      if (!slot) {
+        return false;
+      }
+      if (activeWorkspaceSlotId !== slot.id) {
+        workspaceNavigationVersion += 1;
+      }
+      activeWorkspaceSlotId = slot.id;
+      slot.lastOpenedAt = Date.now();
+      slot.hasUpdates = false;
+      try {
+        localStorage.setItem(ACTIVE_WORKSPACE_SLOT_KEY, activeWorkspaceSlotId);
+      } catch {}
+      if (options.updateUrl !== false) {
+        try {
+          const url = new URL(location.href);
+          url.searchParams.set("slot", activeWorkspaceSlotId);
+          history.replaceState(history.state, "", url.href);
+        } catch {}
+      }
+      await saveWorkspaceSlots({ render: options.render });
+      return true;
+    }
+
+    async function initializeWorkspace() {
+      const stored = await getStoredValue(WORKSPACE_SLOTS_KEY);
+      workspaceSlots = Array.isArray(stored) && stored.length
+        ? stored.map(normalizeWorkspaceSlot)
+        : [normalizeWorkspaceSlot({ id: DEFAULT_WORKSPACE_SLOT_ID, label: "Default" })];
+      const requestedId = getRequestedWorkspaceSlotId();
+      const rememberedId = getLocallyActiveWorkspaceSlotId();
+      activeWorkspaceSlotId = getWorkspaceSlot(requestedId)?.id
+        || getWorkspaceSlot(rememberedId)?.id
+        || workspaceSlots[0].id;
+      workspaceInitialized = true;
+      await setActiveWorkspaceSlotId(activeWorkspaceSlotId, { render: false });
+      startWorkspaceAutoRefresh();
+    }
+
+    async function updateWorkspaceSlot(id, patch, options = {}) {
+      const slot = getWorkspaceSlot(id);
+      if (!slot) {
+        return null;
+      }
+      Object.assign(slot, patch);
+      await saveWorkspaceSlots(options);
+      return slot;
+    }
+
+    function formatWorkspaceRefreshOption(milliseconds) {
+      if (!milliseconds) {
+        return "Auto off";
+      }
+      return `Auto ${milliseconds / 1000}s`;
+    }
+
+    function installWorkspaceBar() {
+      if (!workspaceInitialized || !document.body) {
+        return;
+      }
+      if (!document.getElementById("standalone-viewer-style")) {
+        const style = document.createElement("style");
+        style.id = "standalone-viewer-style";
+        style.textContent = STANDALONE_CSS;
+        document.head.append(style);
+      }
+      document.querySelector(".standalone-workspace-bar")?.remove();
+      const activeSlot = getWorkspaceSlot();
+      const bar = document.createElement("nav");
+      bar.className = "standalone-workspace-bar";
+      bar.setAttribute("aria-label", "Tracked rollout sessions");
+      bar.innerHTML = `
+        <div class="standalone-workspace-tabs">
+          ${workspaceSlots.map(slot => `
+            <span class="standalone-workspace-tab ${slot.id === activeWorkspaceSlotId ? "is-active" : ""} ${slot.hasUpdates ? "has-updates" : ""} ${slot.refreshState === "refreshing" ? "is-refreshing" : ""} ${slot.refreshState === "error" ? "is-error" : ""}" title="${escapeAttribute(slot.refreshMessage || slot.label)}">
+              <button class="standalone-workspace-tab-button" type="button" data-workspace-slot-id="${escapeAttribute(slot.id)}">
+                <span class="standalone-workspace-tab-status" aria-hidden="true"></span>
+                <span class="standalone-workspace-tab-label">${escapeHtml(slot.label)}</span>
+              </button>
+              <button class="standalone-workspace-tab-close" type="button" data-close-workspace-slot-id="${escapeAttribute(slot.id)}" title="Close session">×</button>
+            </span>
+          `).join("")}
+        </div>
+        <div class="standalone-workspace-actions">
+          <button class="standalone-workspace-action" type="button" data-new-workspace-slot title="New empty session">+</button>
+          <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
+          <button class="standalone-workspace-action" type="button" data-refresh-all-workspace-slots ${workspaceSlots.some(slot => slot.sourceId) ? "" : "disabled"}>Refresh all</button>
+          <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh title="Automatic refresh for this session">
+            ${AUTO_REFRESH_INTERVALS.map(value => `<option value="${value}" ${activeSlot?.autoRefreshMs === value ? "selected" : ""}>${formatWorkspaceRefreshOption(value)}</option>`).join("")}
+          </select>
+          <button class="standalone-workspace-action" type="button" data-popout-workspace-slot ${activeSlot ? "" : "disabled"} title="Clone this session into an independent window">New window</button>
+        </div>
+      `;
+      document.body.prepend(bar);
+      bar.querySelector(`[data-workspace-slot-id="${CSS.escape(activeWorkspaceSlotId)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+
     function getDefaultSessionsPathHint() {
       try {
         const pathname = decodeURIComponent(new URL(location.href).pathname)
@@ -4291,6 +4592,7 @@ export async function renderLocalCodexRolloutDocument() {
       const titleElement = document.createElement("title");
       titleElement.textContent = title;
       const style = document.createElement("style");
+      style.id = "standalone-viewer-style";
       style.textContent = STANDALONE_CSS;
       document.head.replaceChildren(charset, viewport, titleElement, style);
       delete document.documentElement.dataset.codexRolloutRendered;
@@ -4315,6 +4617,7 @@ export async function renderLocalCodexRolloutDocument() {
       `;
       updateDefaultPathHint();
       updateSavedDirectoryButtons();
+      installWorkspaceBar();
     }
 
     async function renderDirectorySelectionPage(notice = "") {
@@ -4381,6 +4684,7 @@ export async function renderLocalCodexRolloutDocument() {
       `;
       updateDefaultPathHint();
       updateSavedDirectoryButtons();
+      installWorkspaceBar();
     }
 
     function openHandleDb() {
@@ -4433,6 +4737,26 @@ export async function renderLocalCodexRolloutDocument() {
         });
       } catch (error) {
         console.warn("[codex-rollout-viewer] Could not save value", key, error);
+      } finally {
+        db?.close();
+      }
+    }
+
+    async function deleteStoredValue(key) {
+      let db = null;
+      try {
+        db = await openHandleDb();
+        if (!db) {
+          return;
+        }
+        await new Promise((resolve, reject) => {
+          const transaction = db.transaction(DIRECTORY_STORE_NAME, "readwrite");
+          transaction.objectStore(DIRECTORY_STORE_NAME).delete(key);
+          transaction.addEventListener("complete", () => resolve());
+          transaction.addEventListener("error", () => reject(transaction.error));
+        });
+      } catch (error) {
+        console.warn("[codex-rollout-viewer] Could not delete saved value", key, error);
       } finally {
         db?.close();
       }
@@ -4650,54 +4974,77 @@ export async function renderLocalCodexRolloutDocument() {
       await renderDirectorySelectionPage("Display path updated.");
     }
 
-    async function getSavedCurrentRollout() {
-      return getStoredValueWithLegacy(CURRENT_ROLLOUT_KEY, LEGACY_CURRENT_ROLLOUT_KEY);
+    async function getSavedSlotValue(baseKey, scopedLegacyKey, legacyKey, slotId = activeWorkspaceSlotId) {
+      const value = await getStoredValue(createWorkspaceSlotStorageKey(baseKey, slotId));
+      if (value != null) {
+        return value;
+      }
+      if (slotId === DEFAULT_WORKSPACE_SLOT_ID) {
+        return getStoredValueWithLegacy(scopedLegacyKey, legacyKey);
+      }
+      return null;
     }
 
-    async function saveCurrentRollout(value) {
-      await putStoredValue(CURRENT_ROLLOUT_KEY, value);
+    async function getSavedCurrentRollout(slotId = activeWorkspaceSlotId) {
+      return getSavedSlotValue(LEGACY_CURRENT_ROLLOUT_KEY, CURRENT_ROLLOUT_KEY, LEGACY_CURRENT_ROLLOUT_KEY, slotId);
     }
 
-    async function getSavedCurrentRolloutUiState() {
+    async function saveCurrentRollout(value, slotId = activeWorkspaceSlotId) {
+      await putStoredValue(createWorkspaceSlotStorageKey(LEGACY_CURRENT_ROLLOUT_KEY, slotId), value);
+    }
+
+    async function getSavedCurrentRolloutUiState(slotId = activeWorkspaceSlotId) {
       try {
-        const legacyValue = SHOULD_READ_LEGACY_STANDALONE_STORAGE
+        const slotKey = createWorkspaceSlotStorageKey(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY, slotId);
+        const slotValue = localStorage.getItem(slotKey);
+        const scopedValue = slotId === DEFAULT_WORKSPACE_SLOT_ID
+          ? localStorage.getItem(CURRENT_ROLLOUT_UI_STATE_KEY)
+          : null;
+        const legacyValue = slotId === DEFAULT_WORKSPACE_SLOT_ID && SHOULD_READ_LEGACY_STANDALONE_STORAGE
           ? localStorage.getItem(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY)
           : null;
-        const localValue = JSON.parse(localStorage.getItem(CURRENT_ROLLOUT_UI_STATE_KEY) || legacyValue || "null");
+        const localValue = JSON.parse(slotValue || scopedValue || legacyValue || "null");
         if (localValue) {
           return localValue;
         }
       } catch {}
-      return getStoredValueWithLegacy(CURRENT_ROLLOUT_UI_STATE_KEY, LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY);
+      return getSavedSlotValue(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY, CURRENT_ROLLOUT_UI_STATE_KEY, LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY, slotId);
     }
 
-    async function saveCurrentRolloutUiState(value) {
+    async function saveCurrentRolloutUiState(value, slotId = activeWorkspaceSlotId) {
+      const key = createWorkspaceSlotStorageKey(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY, slotId);
       try {
-        localStorage.setItem(CURRENT_ROLLOUT_UI_STATE_KEY, JSON.stringify(value));
+        localStorage.setItem(key, JSON.stringify(value));
       } catch {}
-      await putStoredValue(CURRENT_ROLLOUT_UI_STATE_KEY, value);
+      await putStoredValue(key, value);
     }
 
-    function getLocalCurrentView() {
+    function getLocalCurrentView(slotId = activeWorkspaceSlotId) {
       try {
-        const legacyValue = SHOULD_READ_LEGACY_STANDALONE_STORAGE
+        const slotValue = localStorage.getItem(createWorkspaceSlotStorageKey(LEGACY_CURRENT_VIEW_KEY, slotId));
+        const scopedValue = slotId === DEFAULT_WORKSPACE_SLOT_ID
+          ? localStorage.getItem(CURRENT_VIEW_KEY)
+          : null;
+        const legacyValue = slotId === DEFAULT_WORKSPACE_SLOT_ID && SHOULD_READ_LEGACY_STANDALONE_STORAGE
           ? localStorage.getItem(LEGACY_CURRENT_VIEW_KEY)
           : null;
-        return JSON.parse(localStorage.getItem(CURRENT_VIEW_KEY) || legacyValue || "null");
+        return JSON.parse(slotValue || scopedValue || legacyValue || "null");
       } catch {
         return null;
       }
     }
 
-    async function getSavedCurrentView() {
-      return getLocalCurrentView() || getStoredValueWithLegacy(CURRENT_VIEW_KEY, LEGACY_CURRENT_VIEW_KEY);
+    async function getSavedCurrentView(slotId = activeWorkspaceSlotId) {
+      return getLocalCurrentView(slotId)
+        || getSavedSlotValue(LEGACY_CURRENT_VIEW_KEY, CURRENT_VIEW_KEY, LEGACY_CURRENT_VIEW_KEY, slotId);
     }
 
-    async function saveCurrentView(value) {
+    async function saveCurrentView(value, slotId = activeWorkspaceSlotId) {
+      const key = createWorkspaceSlotStorageKey(LEGACY_CURRENT_VIEW_KEY, slotId);
       try {
-        localStorage.setItem(CURRENT_VIEW_KEY, JSON.stringify(value));
+        localStorage.setItem(key, JSON.stringify(value));
       } catch {}
-      await putStoredValue(CURRENT_VIEW_KEY, value);
+      await putStoredValue(key, value);
     }
 
     async function getSavedIndexCache() {
@@ -4719,14 +5066,14 @@ export async function renderLocalCodexRolloutDocument() {
       });
     }
 
-    async function getSavedCurrentRolloutRenderCache() {
-      const cache = await getStoredValueWithLegacy(CURRENT_ROLLOUT_RENDER_CACHE_KEY, LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
+    async function getSavedCurrentRolloutRenderCache(slotId = activeWorkspaceSlotId) {
+      const cache = await getSavedSlotValue(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY, CURRENT_ROLLOUT_RENDER_CACHE_KEY, LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY, slotId);
       return cache?.version === RENDER_CACHE_VERSION ? cache : null;
     }
 
-    async function saveCurrentRolloutRenderCache(cache) {
+    async function saveCurrentRolloutRenderCache(cache, slotId = activeWorkspaceSlotId) {
       try {
-        await putStoredValue(CURRENT_ROLLOUT_RENDER_CACHE_KEY, {
+        await putStoredValue(createWorkspaceSlotStorageKey(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY, slotId), {
           ...cache,
           version: RENDER_CACHE_VERSION,
           savedAt: Date.now()
@@ -5274,6 +5621,7 @@ export async function renderLocalCodexRolloutDocument() {
         </main>
       `;
       updateDefaultPathHint();
+      installWorkspaceBar();
     }
 
     async function loadRolloutSources(sources, label, options = {}) {
@@ -5454,19 +5802,15 @@ export async function renderLocalCodexRolloutDocument() {
         : "Sessions folder was forgotten.");
     }
 
-    async function restoreCurrentRollout() {
-      const saved = await getSavedCurrentRollout();
+    async function resolveSavedRolloutSource(saved) {
       if (!saved || saved.kind === "transient") {
-        return false;
+        return null;
       }
       if (saved.kind === "file" && saved.fileHandle) {
         if (!await hasReadPermission(saved.fileHandle)) {
-          return false;
+          return null;
         }
-        await renderSource(createSourceFromFileHandle(saved.fileHandle, saved.path || saved.name), {
-          skipRemember: true
-        });
-        return true;
+        return createSourceFromFileHandle(saved.fileHandle, saved.path || saved.name);
       }
       if (saved.kind === "directory" && saved.path) {
         if (!savedDirectoryEntries.length) {
@@ -5476,22 +5820,35 @@ export async function renderLocalCodexRolloutDocument() {
           ? getDirectoryEntryById(saved.directoryId)
           : savedDirectoryEntries[0];
         if (!entry?.handle || !await hasReadPermission(entry.handle)) {
-          return false;
+          return null;
         }
         const fileHandle = await getFileHandleByPath(entry.handle, saved.path);
         if (!fileHandle) {
-          return false;
+          return null;
         }
-        selectedDirectoryEntry = entry;
-        await renderSource(createSourceFromFileHandle(fileHandle, saved.path, {
+        return createSourceFromFileHandle(fileHandle, saved.path, {
           directoryId: entry.id,
           directoryLabel: getDirectoryEntryLabel(entry)
-        }), {
-          skipRemember: true
         });
-        return true;
       }
-      return false;
+      return null;
+    }
+
+    async function restoreCurrentRollout(slotId = activeWorkspaceSlotId) {
+      const saved = await getSavedCurrentRollout(slotId);
+      const source = await resolveSavedRolloutSource(saved);
+      if (!source) {
+        return false;
+      }
+      if (source.directoryId) {
+        selectedDirectoryEntry = getDirectoryEntryById(source.directoryId);
+      }
+      await renderSource(source, {
+        skipRemember: true,
+        skipSlotSelection: true,
+        slotId
+      });
+      return true;
     }
 
     function getSourceStateId(source) {
@@ -5569,9 +5926,9 @@ export async function renderLocalCodexRolloutDocument() {
       return text.slice(start, end);
     }
 
-    async function readRolloutParsedIncrementally(source, metadata) {
+    async function readRolloutParsedIncrementally(source, metadata, slotId = activeWorkspaceSlotId) {
       const sourceId = getSourceStateId(source);
-      const cached = await getSavedCurrentRolloutRenderCache();
+      const cached = await getSavedCurrentRolloutRenderCache(slotId);
       if (
         cached
         && cached.sourceId === sourceId
@@ -5579,7 +5936,10 @@ export async function renderLocalCodexRolloutDocument() {
         && Array.isArray(cached.errors)
         && Number.isFinite(cached.size)
         && Number.isFinite(metadata.size)
-        && metadata.size >= cached.size
+        && (
+          metadata.size > cached.size
+          || (metadata.size === cached.size && cached.lastModified === metadata.lastModified)
+        )
       ) {
         if (metadata.size === cached.size && cached.lastModified === metadata.lastModified) {
           return {
@@ -5849,7 +6209,301 @@ export async function renderLocalCodexRolloutDocument() {
       });
     }
 
-    async function rememberRenderedSource(source) {
+    async function persistCurrentRenderedUiState(slotId = activeWorkspaceSlotId) {
+      clearTimeout(persistRenderedUiStateSoon.timer);
+      if (!currentRenderedSource) {
+        return;
+      }
+      await saveCurrentRolloutUiState(
+        currentRenderedUiState || captureRenderedUiState(currentRenderedSource),
+        slotId
+      );
+    }
+
+    async function ensureWorkspaceSlotForSource(source) {
+      if (!workspaceInitialized) {
+        return activeWorkspaceSlotId;
+      }
+      const sourceId = getSourceStateId(source);
+      const activeSlot = getWorkspaceSlot();
+      if (!activeSlot?.sourceId || activeSlot.sourceId === sourceId) {
+        await updateWorkspaceSlot(activeWorkspaceSlotId, {
+          label: source.name || activeSlot?.label || "Session",
+          sourceId,
+          refreshState: "idle",
+          refreshMessage: ""
+        }, { render: false });
+        return activeWorkspaceSlotId;
+      }
+      const existingSlot = workspaceSlots.find(slot => slot.sourceId === sourceId);
+      await persistCurrentRenderedUiState(activeWorkspaceSlotId);
+      currentRenderedSource = null;
+      currentRenderedUiState = null;
+      if (existingSlot) {
+        await setActiveWorkspaceSlotId(existingSlot.id, { render: false });
+        return existingSlot.id;
+      }
+      const slot = normalizeWorkspaceSlot({
+        id: createWorkspaceSlotId(),
+        label: source.name || `Session ${workspaceSlots.length + 1}`,
+        sourceId
+      }, workspaceSlots.length);
+      workspaceSlots.push(slot);
+      await setActiveWorkspaceSlotId(slot.id, { render: false });
+      return slot.id;
+    }
+
+    async function renderActiveWorkspaceView() {
+      selectedDirectoryEntry = null;
+      rolloutIndex = [];
+      currentIndexLabel = "";
+      currentIndexNotice = "";
+      const savedView = await getSavedCurrentView();
+      if (savedView?.kind === "rollout" && await restoreCurrentRollout()) {
+        return;
+      }
+      if (await restoreSavedIndexView(savedView)) {
+        return;
+      }
+      if (savedView?.kind === "folders" && savedDirectoryEntries.length) {
+        await renderDirectorySelectionPage();
+        return;
+      }
+      renderHome();
+    }
+
+    async function activateWorkspaceSlot(id) {
+      if (id === activeWorkspaceSlotId || !getWorkspaceSlot(id)) {
+        return;
+      }
+      await persistCurrentRenderedUiState(activeWorkspaceSlotId);
+      currentRenderedSource = null;
+      currentRenderedUiState = null;
+      await setActiveWorkspaceSlotId(id, { render: false });
+      await renderActiveWorkspaceView();
+    }
+
+    async function createEmptyWorkspaceSlot() {
+      await persistCurrentRenderedUiState(activeWorkspaceSlotId);
+      currentRenderedSource = null;
+      currentRenderedUiState = null;
+      const slot = normalizeWorkspaceSlot({
+        id: createWorkspaceSlotId(),
+        label: `Session ${workspaceSlots.length + 1}`
+      }, workspaceSlots.length);
+      workspaceSlots.push(slot);
+      await setActiveWorkspaceSlotId(slot.id, { render: false });
+      renderHome();
+    }
+
+    async function deleteWorkspaceSlotState(id) {
+      const keys = [
+        LEGACY_CURRENT_ROLLOUT_KEY,
+        LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY,
+        LEGACY_CURRENT_VIEW_KEY,
+        LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY
+      ].map(key => createWorkspaceSlotStorageKey(key, id));
+      try {
+        localStorage.removeItem(createWorkspaceSlotStorageKey(LEGACY_CURRENT_ROLLOUT_UI_STATE_KEY, id));
+        localStorage.removeItem(createWorkspaceSlotStorageKey(LEGACY_CURRENT_VIEW_KEY, id));
+      } catch {}
+      await Promise.all(keys.map(deleteStoredValue));
+    }
+
+    async function closeWorkspaceSlot(id) {
+      const index = workspaceSlots.findIndex(slot => slot.id === id);
+      if (index < 0) {
+        return;
+      }
+      const wasActive = id === activeWorkspaceSlotId;
+      if (wasActive) {
+        await persistCurrentRenderedUiState(id);
+        currentRenderedSource = null;
+        currentRenderedUiState = null;
+      }
+      workspaceSlots.splice(index, 1);
+      await deleteWorkspaceSlotState(id);
+      if (!workspaceSlots.length) {
+        workspaceSlots.push(normalizeWorkspaceSlot({ id: createWorkspaceSlotId(), label: "Default" }));
+      }
+      if (!wasActive) {
+        await saveWorkspaceSlots();
+        return;
+      }
+      const nextSlot = workspaceSlots[Math.min(index, workspaceSlots.length - 1)];
+      await setActiveWorkspaceSlotId(nextSlot.id, { render: false });
+      await renderActiveWorkspaceView();
+    }
+
+    async function renameWorkspaceSlot(id) {
+      const slot = getWorkspaceSlot(id);
+      if (!slot) {
+        return;
+      }
+      const label = window.prompt("Session label:", slot.label)?.trim();
+      if (label) {
+        await updateWorkspaceSlot(id, { label });
+      }
+    }
+
+    async function refreshWorkspaceSlot(id, options = {}) {
+      if (workspaceRefreshes.has(id)) {
+        return workspaceRefreshes.get(id);
+      }
+      const task = (async () => {
+        const slot = getWorkspaceSlot(id);
+        if (!slot?.sourceId) {
+          return false;
+        }
+        const hadPreviousRefresh = Boolean(slot.lastRefreshedAt);
+        Object.assign(slot, {
+          refreshState: "refreshing",
+          refreshMessage: "Refreshing..."
+        });
+        await saveWorkspaceSlots();
+        try {
+          const saved = await getSavedCurrentRollout(id);
+          const source = id === activeWorkspaceSlotId
+            && currentRenderedSource
+            && getSourceStateId(currentRenderedSource) === slot.sourceId
+            ? currentRenderedSource
+            : await resolveSavedRolloutSource(saved);
+          if (!source) {
+            throw new Error("File permission is unavailable. Open the session again to restore access.");
+          }
+          if (id === activeWorkspaceSlotId && options.renderActive !== false) {
+            await renderSource(source, {
+              skipRemember: true,
+              skipSlotSelection: true,
+              slotId: id
+            });
+            Object.assign(slot, {
+              hasUpdates: false,
+              refreshMessage: "Up to date."
+            });
+          } else {
+            const metadata = await getSourceMetadata(source);
+            const parsedResult = await readRolloutParsedIncrementally(source, metadata, id);
+            if (!isCodexRolloutRecords(parsedResult.parsed.records)) {
+              throw new Error("The file no longer looks like a Codex rollout JSONL file.");
+            }
+            await saveCurrentRolloutRenderCache(parsedResult.cache, id);
+            slot.hasUpdates = slot.hasUpdates || (hadPreviousRefresh && parsedResult.appendedBytes > 0);
+            slot.refreshMessage = parsedResult.appendedBytes > 0
+              ? `${formatNumber(parsedResult.appendedBytes)} new bytes parsed.`
+              : "Up to date.";
+          }
+          const now = Date.now();
+          Object.assign(slot, {
+            lastRefreshedAt: now,
+            nextRefreshAt: slot.autoRefreshMs ? now + slot.autoRefreshMs : 0,
+            refreshState: "idle"
+          });
+          await saveWorkspaceSlots();
+          return true;
+        } catch (error) {
+          Object.assign(slot, {
+            refreshState: "error",
+            refreshMessage: error?.message || String(error),
+            nextRefreshAt: slot.autoRefreshMs ? Date.now() + slot.autoRefreshMs : 0
+          });
+          await saveWorkspaceSlots();
+          if (id === activeWorkspaceSlotId) {
+            setStatus(`Could not refresh ${slot.label}: ${slot.refreshMessage}`, true);
+          }
+          return false;
+        }
+      })().finally(() => {
+        workspaceRefreshes.delete(id);
+      });
+      workspaceRefreshes.set(id, task);
+      return task;
+    }
+
+    async function refreshAllWorkspaceSlots() {
+      const inactive = workspaceSlots.filter(slot => slot.sourceId && slot.id !== activeWorkspaceSlotId);
+      await Promise.all(inactive.map(slot => refreshWorkspaceSlot(slot.id, { renderActive: false })));
+      if (getWorkspaceSlot()?.sourceId) {
+        await refreshWorkspaceSlot(activeWorkspaceSlotId);
+      }
+    }
+
+    function startWorkspaceAutoRefresh() {
+      clearInterval(workspaceRefreshTimer);
+      workspaceRefreshTimer = setInterval(() => {
+        if (document.visibilityState === "hidden") {
+          return;
+        }
+        const now = Date.now();
+        workspaceSlots.forEach(slot => {
+          if (slot.sourceId && slot.autoRefreshMs && (!slot.nextRefreshAt || slot.nextRefreshAt <= now)) {
+            slot.nextRefreshAt = now + slot.autoRefreshMs;
+            refreshWorkspaceSlot(slot.id, { renderActive: true });
+          }
+        });
+      }, 1000);
+    }
+
+    async function openWorkspaceSlotInNewWindow(id = activeWorkspaceSlotId) {
+      const popup = window.open("about:blank", "_blank");
+      if (!popup) {
+        setStatus("The browser blocked the new window. Allow pop-ups for this viewer and try again.", true);
+        return false;
+      }
+      try {
+        popup.opener = null;
+      } catch {}
+      try {
+        if (id === activeWorkspaceSlotId) {
+          await persistCurrentRenderedUiState(id);
+        }
+        const sourceSlot = getWorkspaceSlot(id);
+        if (!sourceSlot) {
+          throw new Error("The source session no longer exists.");
+        }
+        const newSlotId = createWorkspaceSlotId();
+        const [rollout, uiState, view, renderCache] = await Promise.all([
+          getSavedCurrentRollout(id),
+          getSavedCurrentRolloutUiState(id),
+          getSavedCurrentView(id),
+          getSavedCurrentRolloutRenderCache(id)
+        ]);
+        const now = Date.now();
+        const clonedSlot = normalizeWorkspaceSlot({
+          ...sourceSlot,
+          id: newSlotId,
+          label: `${sourceSlot.label} · window`,
+          createdAt: now,
+          lastOpenedAt: now,
+          lastRefreshedAt: 0,
+          nextRefreshAt: sourceSlot.autoRefreshMs ? now + sourceSlot.autoRefreshMs : 0,
+          hasUpdates: false,
+          refreshState: "idle",
+          refreshMessage: "Independent window"
+        }, workspaceSlots.length);
+        workspaceSlots.push(clonedSlot);
+        await Promise.all([
+          saveWorkspaceSlots(),
+          rollout != null ? saveCurrentRollout(rollout, newSlotId) : Promise.resolve(),
+          uiState != null ? saveCurrentRolloutUiState(uiState, newSlotId) : Promise.resolve(),
+          view != null ? saveCurrentView(view, newSlotId) : Promise.resolve(),
+          renderCache != null ? saveCurrentRolloutRenderCache(renderCache, newSlotId) : Promise.resolve()
+        ]);
+        const url = new URL(location.href);
+        url.searchParams.set("slot", newSlotId);
+        url.hash = "";
+        popup.location.replace(url.href);
+        return true;
+      } catch (error) {
+        try {
+          popup.close();
+        } catch {}
+        setStatus(`Could not open an independent window: ${error?.message || error}`, true);
+        return false;
+      }
+    }
+
+    async function rememberRenderedSource(source, slotId = activeWorkspaceSlotId) {
       if (source.directoryId && source.path) {
         await saveCurrentRollout({
           kind: "directory",
@@ -5857,27 +6511,35 @@ export async function renderLocalCodexRolloutDocument() {
           directoryLabel: source.directoryLabel || "",
           name: source.name,
           path: source.path
-        });
+        }, slotId);
       } else if (source.fileHandle) {
         await saveCurrentRollout({
           kind: "file",
           name: source.name,
           path: source.path || source.name,
           fileHandle: source.fileHandle
-        });
+        }, slotId);
       } else {
         await saveCurrentRollout({
           kind: "transient",
           name: source.name,
           path: source.path || source.name
-        });
+        }, slotId);
       }
     }
 
     async function renderSource(source, options = {}) {
+      const slotId = options.skipSlotSelection
+        ? (options.slotId || activeWorkspaceSlotId)
+        : await ensureWorkspaceSlotForSource(source);
+      const navigationVersion = workspaceNavigationVersion;
+      const previousRenderedSource = currentRenderedSource;
+      const previousRenderedUiState = currentRenderedUiState;
+      const wasRenderingSameSource = previousRenderedSource
+        && getSourceStateId(previousRenderedSource) === getSourceStateId(source);
       if (currentRenderedSource) {
         clearTimeout(persistRenderedUiStateSoon.timer);
-        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource));
+        await saveCurrentRolloutUiState(currentRenderedUiState || captureRenderedUiState(currentRenderedSource), slotId);
       }
       clearTimeout(persistRenderedUiStateSoon.timer);
       currentRenderedSource = null;
@@ -5887,23 +6549,23 @@ export async function renderLocalCodexRolloutDocument() {
       let parsedResult = null;
       try {
         metadata = await getSourceMetadata(source);
-        parsedResult = await readRolloutParsedIncrementally(source, metadata);
+        parsedResult = await readRolloutParsedIncrementally(source, metadata, slotId);
       } catch (error) {
-        setStatus(`Could not read ${source.name}: ${error?.message || error}`, true);
-        return;
+        if (slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion) {
+          setStatus(`Could not read ${source.name}: ${error?.message || error}`, true);
+        }
+        return false;
       }
       if (!isCodexRolloutRecords(parsedResult.parsed.records)) {
-        renderHome();
-        setStatus(`${source.name} does not look like a Codex rollout JSONL file.`, true);
-        return;
+        if (slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion) {
+          renderHome();
+          setStatus(`${source.name} does not look like a Codex rollout JSONL file.`, true);
+        }
+        return false;
       }
-      const result = await renderCodexRolloutRecords(parsedResult.parsed, {
-        fileName: source.name,
-        sourceUrl: source.path || source.name
-      });
-      await saveCurrentRolloutRenderCache(parsedResult.cache);
+      await saveCurrentRolloutRenderCache(parsedResult.cache, slotId);
       if (!options.skipRemember) {
-        await rememberRenderedSource(source);
+        await rememberRenderedSource(source, slotId);
       }
       await saveCurrentView({
         kind: "rollout",
@@ -5912,12 +6574,40 @@ export async function renderLocalCodexRolloutDocument() {
         path: source.path || source.name,
         sourceId: getSourceStateId(source),
         savedAt: Date.now()
+      }, slotId);
+      const shouldRender = slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion;
+      const slot = getWorkspaceSlot(slotId);
+      await updateWorkspaceSlot(slotId, {
+        sourceId: getSourceStateId(source),
+        label: slot?.sourceId ? slot.label : source.name,
+        lastRefreshedAt: Date.now(),
+        nextRefreshAt: slot?.autoRefreshMs ? Date.now() + slot.autoRefreshMs : 0,
+        hasUpdates: shouldRender ? false : Boolean(slot?.hasUpdates || parsedResult.appendedBytes > 0),
+        refreshState: "idle",
+        refreshMessage: parsedResult.appendedBytes > 0 ? `${formatNumber(parsedResult.appendedBytes)} bytes parsed.` : "Up to date."
+      }, { render: false });
+      if (!shouldRender) {
+        installWorkspaceBar();
+        return false;
+      }
+      if (wasRenderingSameSource && parsedResult.appendedBytes === 0) {
+        currentRenderedSource = previousRenderedSource;
+        currentRenderedUiState = previousRenderedUiState;
+        ensureRenderedUiStatePersistenceInstalled();
+        installWorkspaceBar();
+        return true;
+      }
+      await renderCodexRolloutRecords(parsedResult.parsed, {
+        fileName: source.name,
+        sourceUrl: source.path || source.name
       });
       installRenderToolbar(source.name);
-      restoreRenderedUiState(await getSavedCurrentRolloutUiState(), source);
+      restoreRenderedUiState(await getSavedCurrentRolloutUiState(slotId), source);
       currentRenderedSource = source;
       ensureRenderedUiStatePersistenceInstalled();
+      installWorkspaceBar();
       scrollToDocumentEndSoon();
+      return true;
     }
 
     async function renderIndexedRollout(id) {
@@ -6017,6 +6707,32 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     document.addEventListener("click", async event => {
+      const workspaceSlotButton = event.target.closest("[data-workspace-slot-id]");
+      if (workspaceSlotButton) {
+        await activateWorkspaceSlot(workspaceSlotButton.dataset.workspaceSlotId);
+        return;
+      }
+      const closeWorkspaceSlotButton = event.target.closest("[data-close-workspace-slot-id]");
+      if (closeWorkspaceSlotButton) {
+        await closeWorkspaceSlot(closeWorkspaceSlotButton.dataset.closeWorkspaceSlotId);
+        return;
+      }
+      if (event.target.closest("[data-new-workspace-slot]")) {
+        await createEmptyWorkspaceSlot();
+        return;
+      }
+      if (event.target.closest("[data-refresh-workspace-slot]")) {
+        await refreshWorkspaceSlot(activeWorkspaceSlotId);
+        return;
+      }
+      if (event.target.closest("[data-refresh-all-workspace-slots]")) {
+        await refreshAllWorkspaceSlots();
+        return;
+      }
+      if (event.target.closest("[data-popout-workspace-slot]")) {
+        await openWorkspaceSlotInNewWindow();
+        return;
+      }
       const rolloutButton = event.target.closest("[data-rollout-id]");
       if (rolloutButton) {
         renderIndexedRollout(rolloutButton.dataset.rolloutId);
@@ -6069,7 +6785,15 @@ export async function renderLocalCodexRolloutDocument() {
     });
 
     document.addEventListener("change", event => {
-      if (event.target.matches("[data-cwd-filter]")) {
+      if (event.target.matches("[data-workspace-auto-refresh]")) {
+        const milliseconds = Number(event.target.value);
+        if (AUTO_REFRESH_INTERVALS.includes(milliseconds)) {
+          updateWorkspaceSlot(activeWorkspaceSlotId, {
+            autoRefreshMs: milliseconds,
+            nextRefreshAt: milliseconds ? Date.now() + milliseconds : 0
+          });
+        }
+      } else if (event.target.matches("[data-cwd-filter]")) {
         indexCwdFilter = event.target.value;
         renderRolloutIndex(rolloutIndex, currentIndexLabel || "Codex rollout sessions", currentIndexNotice);
       } else if (event.target.matches("[data-cwd-sort]")) {
@@ -6092,6 +6816,25 @@ export async function renderLocalCodexRolloutDocument() {
         selectedDirectoryEntry = null;
         loadRolloutSources(sources, "Selected folder");
       }
+    });
+
+    document.addEventListener("dblclick", event => {
+      const slotButton = event.target.closest("[data-workspace-slot-id]");
+      if (slotButton) {
+        renameWorkspaceSlot(slotButton.dataset.workspaceSlotId);
+      }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      const now = Date.now();
+      workspaceSlots.forEach(slot => {
+        if (slot.sourceId && slot.autoRefreshMs && (!slot.nextRefreshAt || slot.nextRefreshAt <= now)) {
+          refreshWorkspaceSlot(slot.id, { renderActive: true });
+        }
+      });
     });
 
     document.addEventListener("dragover", event => {
@@ -6129,6 +6872,7 @@ export async function renderLocalCodexRolloutDocument() {
           label.hidden = false;
         });
       }
+      await initializeWorkspace();
       savedDirectoryEntries = await getSavedDirectoryEntries();
       const savedView = await getSavedCurrentView();
       if (savedView?.kind === "rollout" && await restoreCurrentRollout()) {
