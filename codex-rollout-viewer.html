@@ -664,6 +664,22 @@ body.codex-rollout-page {
   font-weight: 650;
 }
 
+.rollout-directory-patch-stats {
+  display: inline-flex;
+  gap: 5px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rollout-patch-additions {
+  color: var(--wh-rollout-green);
+}
+
+.rollout-patch-deletions {
+  color: var(--wh-rollout-red);
+}
+
 .rollout-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(94px, 1fr));
@@ -872,12 +888,24 @@ body.codex-rollout-page {
 }
 
 .rollout-turn-title h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
   line-height: 1.3;
+}
+
+.rollout-turn-heading-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rollout-turn-title h2 > .rollout-directory-patch-stats:empty {
+  display: none;
 }
 
 .rollout-turn-body {
@@ -890,7 +918,7 @@ body.codex-rollout-page {
 
 .rollout-assistant-section > summary {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) max-content;
+  grid-template-columns: 18px max-content minmax(0, 1fr) max-content;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -937,7 +965,7 @@ body.codex-rollout-page {
 
 .rollout-compact-section > summary {
   display: grid;
-  grid-template-columns: 18px minmax(28px, 1fr) max-content minmax(28px, 1fr) max-content;
+  grid-template-columns: 18px minmax(28px, 1fr) max-content max-content minmax(28px, 1fr) max-content;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -1030,6 +1058,41 @@ body.codex-rollout-page {
 .rollout-role-tool {
   border-color: rgba(188, 140, 255, 0.45);
   color: var(--wh-rollout-purple);
+}
+
+.rollout-role.has-tool-role-names {
+  gap: 4px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rollout-tool-role-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid rgba(188, 140, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(188, 140, 255, 0.06);
+  color: var(--wh-rollout-purple);
+}
+
+.rollout-tool-role-name.is-apply-patch {
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.07);
+  color: var(--wh-rollout-green);
+}
+
+.rollout-tool-role-name.is-exec-command {
+  border-color: rgba(88, 166, 255, 0.5);
+  background: rgba(88, 166, 255, 0.07);
+  color: var(--wh-rollout-blue);
+}
+
+.rollout-tool-role-separator {
+  color: var(--wh-rollout-subtle);
 }
 
 .rollout-role-error {
@@ -1354,21 +1417,29 @@ pre + .rollout-kv,
   background: #0d1117;
 }
 
-.rollout-diff-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.rollout-patch-summary-content {
+  display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--wh-rollout-border-muted);
-  background: rgba(88, 166, 255, 0.05);
+  gap: 10px;
+  width: calc(100% - 18px);
+  vertical-align: middle;
 }
 
-.rollout-diff-stats {
-  color: var(--wh-rollout-muted);
-  font-size: 12px;
-  font-weight: 650;
+.rollout-patch-summary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rollout-patch-summary-label .rollout-diff-path {
+  flex: 1 1 auto;
+}
+
+.rollout-patch-summary-label .rollout-diff-file-stat,
+.rollout-patch-summary-content .rollout-diff-mode {
+  flex: 0 0 auto;
 }
 
 .rollout-diff-mode {
@@ -1499,6 +1570,23 @@ pre + .rollout-kv,
 .rollout-diff-row-delete .rollout-diff-prefix,
 .rollout-diff-cell-delete .rollout-diff-prefix {
   color: var(--wh-rollout-red);
+}
+
+.rollout-diff-word-add,
+.rollout-diff-word-delete {
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.rollout-diff-word-add {
+  background: rgba(63, 185, 80, 0.42);
+  color: #c7f9d0;
+}
+
+.rollout-diff-word-delete {
+  background: rgba(255, 107, 107, 0.42);
+  color: #ffd1d1;
 }
 
 .rollout-diff-row-hunk,
@@ -2333,18 +2421,107 @@ function getDiffLineClass(type, prefix) {
   return "";
 }
 
-function renderUnifiedDiffLine(line) {
+function tokenizeDiffText(value) {
+  return String(value ?? "").match(/\s+|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|./gu) || [];
+}
+
+function renderDiffTokens(tokens, unchanged, className) {
+  const parts = [];
+  let changedText = "";
+  const flushChanged = () => {
+    if (!changedText) {
+      return;
+    }
+    parts.push(`<span class="${className}">${escapeHtml(changedText)}</span>`);
+    changedText = "";
+  };
+  tokens.forEach((token, index) => {
+    if (unchanged.has(index)) {
+      flushChanged();
+      parts.push(escapeHtml(token));
+    } else {
+      changedText += token;
+    }
+  });
+  flushChanged();
+  return parts.join("");
+}
+
+function renderWordDiffPair(deletedText, addedText) {
+  const deletedTokens = tokenizeDiffText(deletedText);
+  const addedTokens = tokenizeDiffText(addedText);
+  if (deletedText === addedText) {
+    const html = escapeHtml(deletedText);
+    return { deletedHtml: html, addedHtml: html };
+  }
+  if (deletedTokens.length * addedTokens.length > 40000) {
+    return {
+      deletedHtml: `<span class="rollout-diff-word-delete">${escapeHtml(deletedText)}</span>`,
+      addedHtml: `<span class="rollout-diff-word-add">${escapeHtml(addedText)}</span>`
+    };
+  }
+  const lengths = Array.from({ length: deletedTokens.length + 1 }, () => new Uint16Array(addedTokens.length + 1));
+  for (let deletedIndex = deletedTokens.length - 1; deletedIndex >= 0; deletedIndex -= 1) {
+    for (let addedIndex = addedTokens.length - 1; addedIndex >= 0; addedIndex -= 1) {
+      lengths[deletedIndex][addedIndex] = deletedTokens[deletedIndex] === addedTokens[addedIndex]
+        ? lengths[deletedIndex + 1][addedIndex + 1] + 1
+        : Math.max(lengths[deletedIndex + 1][addedIndex], lengths[deletedIndex][addedIndex + 1]);
+    }
+  }
+  const unchangedDeleted = new Set();
+  const unchangedAdded = new Set();
+  let deletedIndex = 0;
+  let addedIndex = 0;
+  while (deletedIndex < deletedTokens.length && addedIndex < addedTokens.length) {
+    if (deletedTokens[deletedIndex] === addedTokens[addedIndex]) {
+      unchangedDeleted.add(deletedIndex);
+      unchangedAdded.add(addedIndex);
+      deletedIndex += 1;
+      addedIndex += 1;
+    } else if (lengths[deletedIndex + 1][addedIndex] >= lengths[deletedIndex][addedIndex + 1]) {
+      deletedIndex += 1;
+    } else {
+      addedIndex += 1;
+    }
+  }
+  return {
+    deletedHtml: renderDiffTokens(deletedTokens, unchangedDeleted, "rollout-diff-word-delete"),
+    addedHtml: renderDiffTokens(addedTokens, unchangedAdded, "rollout-diff-word-add")
+  };
+}
+
+function getDiffWordHighlights(lines) {
+  const highlights = new Map();
+  let pendingDeletes = [];
+  for (const line of lines) {
+    if (line.type === "delete") {
+      pendingDeletes.push(line);
+    } else if (line.type === "add") {
+      const deleted = pendingDeletes.shift();
+      if (deleted) {
+        const pair = renderWordDiffPair(deleted.text, line.text);
+        highlights.set(deleted, pair.deletedHtml);
+        highlights.set(line, pair.addedHtml);
+      }
+    } else {
+      pendingDeletes = [];
+    }
+  }
+  return highlights;
+}
+
+function renderUnifiedDiffLine(line, highlights) {
   const prefix = line.type === "add" ? "+" : line.type === "delete" ? "-" : line.type === "hunk" ? "@" : " ";
   const text = line.type === "hunk" ? `@ ${line.text.replace(/^@@\s*/, "")}` : line.text;
   return `
     <div class="rollout-diff-row ${getDiffLineClass(line.type, "rollout-diff-row")}">
       <span class="rollout-diff-prefix">${escapeHtml(prefix)}</span>
-      <span class="rollout-diff-line">${escapeHtml(text)}</span>
+      <span class="rollout-diff-line">${highlights.get(line) || escapeHtml(text)}</span>
     </div>
   `;
 }
 
-function renderSplitDiffCell(line, extraClass = "") {
+function renderSplitDiffCell(line, highlights, extraClass = "") {
   if (!line) {
     return `<div class="rollout-diff-cell is-blank ${extraClass}"><span class="rollout-diff-prefix"></span><span class="rollout-diff-line"></span></div>`;
   }
@@ -2352,12 +2529,12 @@ function renderSplitDiffCell(line, extraClass = "") {
   return `
     <div class="rollout-diff-cell ${getDiffLineClass(line.type, "rollout-diff-cell")} ${extraClass}">
       <span class="rollout-diff-prefix">${escapeHtml(prefix)}</span>
-      <span class="rollout-diff-line">${escapeHtml(line.text)}</span>
+      <span class="rollout-diff-line">${highlights.get(line) || escapeHtml(line.text)}</span>
     </div>
   `;
 }
 
-function renderSplitDiffRows(lines) {
+function renderSplitDiffRows(lines, highlights) {
   const rows = [];
   let pendingDeletes = [];
   for (const line of lines) {
@@ -2365,8 +2542,8 @@ function renderSplitDiffRows(lines) {
       while (pendingDeletes.length) {
         rows.push(`
           <div class="rollout-diff-split-row">
-            ${renderSplitDiffCell(pendingDeletes.shift())}
-            ${renderSplitDiffCell(null)}
+            ${renderSplitDiffCell(pendingDeletes.shift(), highlights)}
+            ${renderSplitDiffCell(null, highlights)}
           </div>
         `);
       }
@@ -2381,8 +2558,8 @@ function renderSplitDiffRows(lines) {
       const deleted = pendingDeletes.shift() || null;
       rows.push(`
         <div class="rollout-diff-split-row">
-          ${renderSplitDiffCell(deleted)}
-          ${renderSplitDiffCell(line)}
+          ${renderSplitDiffCell(deleted, highlights)}
+          ${renderSplitDiffCell(line, highlights)}
         </div>
       `);
       continue;
@@ -2390,23 +2567,23 @@ function renderSplitDiffRows(lines) {
     while (pendingDeletes.length) {
       rows.push(`
         <div class="rollout-diff-split-row">
-          ${renderSplitDiffCell(pendingDeletes.shift())}
-          ${renderSplitDiffCell(null)}
+          ${renderSplitDiffCell(pendingDeletes.shift(), highlights)}
+          ${renderSplitDiffCell(null, highlights)}
         </div>
       `);
     }
     rows.push(`
       <div class="rollout-diff-split-row">
-        ${renderSplitDiffCell(line)}
-        ${renderSplitDiffCell(line)}
+        ${renderSplitDiffCell(line, highlights)}
+        ${renderSplitDiffCell(line, highlights)}
       </div>
     `);
   }
   while (pendingDeletes.length) {
     rows.push(`
       <div class="rollout-diff-split-row">
-        ${renderSplitDiffCell(pendingDeletes.shift())}
-        ${renderSplitDiffCell(null)}
+        ${renderSplitDiffCell(pendingDeletes.shift(), highlights)}
+        ${renderSplitDiffCell(null, highlights)}
       </div>
     `);
   }
@@ -2414,19 +2591,24 @@ function renderSplitDiffRows(lines) {
 }
 
 function renderPatchFileBody(lines) {
+  const highlights = getDiffWordHighlights(lines);
   return `
-    <div class="rollout-diff-view rollout-diff-unified">${lines.map(renderUnifiedDiffLine).join("")}</div>
-    <div class="rollout-diff-view rollout-diff-split">${renderSplitDiffRows(lines)}</div>
+    <div class="rollout-diff-view rollout-diff-unified">${lines.map(line => renderUnifiedDiffLine(line, highlights)).join("")}</div>
+    <div class="rollout-diff-view rollout-diff-split">${renderSplitDiffRows(lines, highlights)}</div>
   `;
+}
+
+function renderPatchLineStats(additions, deletions) {
+  return `<span class="rollout-patch-additions">+${formatNumber(additions)}</span> <span class="rollout-patch-deletions">-${formatNumber(deletions)}</span>`;
 }
 
 function renderPatchFileShell(file, index, record) {
   const lazyKey = storeLazyRolloutContent(file.lines);
   return `
-    <details class="rollout-diff-file" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-file-${index}" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
+    <details class="rollout-diff-file" open data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-file-${index}" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
       <summary>
         <span class="rollout-diff-path">${escapeHtml(file.moveTo ? `${file.path} -> ${file.moveTo}` : file.path)}</span>
-        <span class="rollout-diff-file-stat">+${formatNumber(file.additions)} -${formatNumber(file.deletions)}</span>
+        <span class="rollout-diff-file-stat">${renderPatchLineStats(file.additions, file.deletions)}</span>
       </summary>
       <div class="rollout-diff-body" data-rollout-diff-file-body></div>
     </details>
@@ -2438,18 +2620,27 @@ function renderPatchFiles(files, record) {
     return "";
   }
   const stats = getPatchStats(files);
+  const singleFile = files.length === 1 ? files[0] : null;
+  const singleFileLazyKey = singleFile ? storeLazyRolloutContent(singleFile.lines) : "";
+  const singleFileAttributes = singleFile
+    ? ` data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(singleFileLazyKey)}"`
+    : "";
+  const summaryLabel = singleFile
+    ? `Patch diff <span class="rollout-diff-path">${escapeHtml(singleFile.moveTo ? `${singleFile.path} -> ${singleFile.moveTo}` : singleFile.path)}</span><span class="rollout-diff-file-stat">${renderPatchLineStats(singleFile.additions, singleFile.deletions)}</span>`
+    : `Patch diff, ${formatNumber(stats.files)} files, ${renderPatchLineStats(stats.additions, stats.deletions)}`;
   return `
-    <details class="rollout-details rollout-patch-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch">
-      <summary>Patch diff, ${formatNumber(stats.files)} files, +${formatNumber(stats.additions)} -${formatNumber(stats.deletions)}</summary>
+    <details class="rollout-details rollout-patch-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch"${singleFileAttributes}>
+      <summary><span class="rollout-patch-summary-content">
+        <span class="rollout-patch-summary-label">${summaryLabel}</span>
+        <span class="rollout-diff-mode" role="group" aria-label="Diff view mode">
+          <button type="button" data-rollout-diff-mode="unified" aria-pressed="true">Unified</button>
+          <button type="button" data-rollout-diff-mode="split" aria-pressed="false">Split</button>
+        </span>
+      </span></summary>
       <div class="rollout-diff is-unified" data-rollout-diff data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-mode">
-        <div class="rollout-diff-toolbar">
-          <span class="rollout-diff-stats">${formatNumber(stats.files)} files changed, +${formatNumber(stats.additions)} -${formatNumber(stats.deletions)}</span>
-          <span class="rollout-diff-mode" role="group" aria-label="Diff view mode">
-            <button type="button" data-rollout-diff-mode="unified" aria-pressed="true">Unified</button>
-            <button type="button" data-rollout-diff-mode="split" aria-pressed="false">Split</button>
-          </span>
-        </div>
-        ${files.map((file, index) => renderPatchFileShell(file, index, record)).join("")}
+        ${singleFile
+          ? `<div class="rollout-diff-body" data-rollout-diff-file-body></div>`
+          : files.map((file, index) => renderPatchFileShell(file, index, record)).join("")}
       </div>
     </details>
   `;
@@ -2937,6 +3128,27 @@ function parseExecCommandCalls(input) {
   return calls;
 }
 
+function parseExecToolNames(input) {
+  const source = String(input ?? "");
+  const names = [];
+  const invocationPattern = /tools\.([A-Za-z_$][\w$]*)\s*\(/g;
+  let match = null;
+  while ((match = invocationPattern.exec(source))) {
+    names.push(match[1]);
+  }
+  return names;
+}
+
+function renderToolRoleNames(names) {
+  return names.map((name, index) => {
+    const className = name === "apply_patch" ? "is-apply-patch"
+      : name === "exec_command" || name === "shell_command" ? "is-exec-command"
+      : "";
+    const separator = index ? `<span class="rollout-tool-role-separator"> / </span>` : "";
+    return `${separator}<span class="rollout-tool-role-name ${className}">${escapeHtml(name)}</span>`;
+  }).join("");
+}
+
 function parseJsonLikeObjectLiteral(objectText) {
   try {
     return JSON.parse(objectText);
@@ -3187,6 +3399,36 @@ function summarizeGroup(group) {
   return counts;
 }
 
+function getRecordsPatchStats(records) {
+  const patchRecords = [];
+  const seen = new Set();
+  for (const record of records) {
+    for (const candidate of [record, ...(record.toolGroup?.eventRecords || [])]) {
+      const changes = candidate.value?.payload?.changes;
+      const hasUnifiedDiffChanges = changes && typeof changes === "object"
+        && Object.values(changes).some(change => typeof change?.unified_diff === "string");
+      if (seen.has(candidate) || !hasUnifiedDiffChanges) {
+        continue;
+      }
+      seen.add(candidate);
+      patchRecords.push(candidate);
+    }
+  }
+  const files = patchRecords.flatMap(record => parsePatchApplyEndChanges(record.value?.payload?.changes));
+  return {
+    ...getPatchStats(files),
+    patches: patchRecords.length
+  };
+}
+
+function renderDirectoryPatchStats(records) {
+  const stats = getRecordsPatchStats(records);
+  return `<span class="rollout-directory-patch-stats">${stats.patches ? `
+    <span class="rollout-patch-additions">+${formatNumber(stats.additions)}</span>
+    <span class="rollout-patch-deletions">-${formatNumber(stats.deletions)}</span>
+  ` : ""}</span>`;
+}
+
 function buildGroupSections(group) {
   const sections = [];
   let currentAssistantSection = null;
@@ -3290,9 +3532,9 @@ function renderSidebar(records, groups, errors, callById, options = {}) {
     <aside class="rollout-sidebar" aria-label="Rollout outline">
       <p class="rollout-tree-title">Outline</p>
       <div class="rollout-tree-actions">
-        <button class="rollout-tool-btn" type="button" data-rollout-collapse-all>Collapse</button>
-        <button class="rollout-tool-btn" type="button" data-rollout-expand-level-one>Level 1</button>
-        <button class="rollout-tool-btn" type="button" data-rollout-expand-all>All</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse to level 0" data-rollout-collapse-level-zero>Collapse L0</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse to level 1" data-rollout-collapse-level-one>Collapse L1</button>
+        <button class="rollout-tool-btn" type="button" title="Expand to level 1" data-rollout-expand-level-one>Expand L1</button>
         <button class="rollout-tool-btn" type="button" data-rollout-toggle-wrap>Wrap</button>
       </div>
       <nav class="rollout-tree">
@@ -3333,7 +3575,7 @@ function renderEntry(record, role, title, body, options = {}) {
   return `
     <article class="rollout-entry rollout-entry-${escapeAttribute(options.kind || role || "event")} ${options.className || ""} rollout-entry-anchor" id="record-${record.line}">
       <div class="rollout-entry-head">
-        <span class="rollout-role ${roleClass}">${escapeHtml(role || "event")}</span>
+        <span class="rollout-role ${roleClass} ${options.roleHtml ? "has-tool-role-names" : ""}">${options.roleHtml || escapeHtml(role || "event")}</span>
         <span class="rollout-entry-title">${escapeHtml(timestamp || title)}</span>
         <span class="rollout-line">line ${line}</span>
       </div>
@@ -3387,7 +3629,7 @@ function renderToolOutputDetails(output, record, suffix = "output", label = "Out
     : `<p class="rollout-empty">No output.</p>`;
 }
 
-function renderExecCommandPair(command, result, index, total, record) {
+function renderExecCommandPair(command, result, index, record) {
   const commandText = String(command?.command ?? "");
   const outputText = String(result?.output ?? "");
   const exitCode = result?.exit_code == null ? Number.NaN : Number(result.exit_code);
@@ -3406,7 +3648,7 @@ function renderExecCommandPair(command, result, index, total, record) {
   return `
     <section class="rollout-exec-command ${className}">
       <div class="rollout-exec-command-head">
-        <span>${escapeHtml(command?.tool || "exec_command")} ${formatNumber(index + 1)}/${formatNumber(total)}</span>
+        <span>${escapeHtml(command?.tool || "exec_command")}</span>
         <span>${escapeHtml(meta)}</span>
       </div>
       ${command?.workdir ? renderKeyValueList([["Workdir", command.workdir]]) : ""}
@@ -3425,8 +3667,8 @@ function renderAttachedPatchEvent(patchRecord) {
   return `
     <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""}">
       <div class="rollout-exec-command-head">
-        <span>patch_apply</span>
-        <span>${escapeHtml([payload.status, payload.success === false ? "failed" : payload.success === true ? "success" : ""].filter(Boolean).join(" / "))}</span>
+        <span>apply_patch</span>
+        ${payload.success === false ? "<span>failed</span>" : ""}
       </div>
       ${renderPatchApplyEndDiff(payload.changes, patchRecord)}
       ${payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${patchRecord.line}:stderr`) : ""}
@@ -3440,12 +3682,15 @@ function renderExecToolGroup(record) {
   const outputPayload = group.outputRecord?.value?.payload ?? {};
   const input = String(callPayload.input ?? callPayload.arguments ?? "");
   const commands = parseExecCommandCalls(input);
+  const toolNames = [...new Set(parseExecToolNames(input))]
+    .sort((left, right) => Number(right === "apply_patch") - Number(left === "apply_patch"))
+  const toolRole = toolNames.join(" / ") || "exec";
   const updatePlans = parseNestedToolArguments(input, "update_plan");
   const parsedOutput = commands.length === 1
     ? parseExecWrapperOutput(outputPayload.output)
     : parseStructuredToolOutput(outputPayload.output);
   const pairs = Array.from({ length: commands.length }, (unused, index) =>
-    renderExecCommandPair(commands[index], parsedOutput.results[index], index, commands.length, record)
+    renderExecCommandPair(commands[index], parsedOutput.results[index], index, record)
   );
   const patches = group.eventRecords.map(renderAttachedPatchEvent);
   const unmatchedResults = parsedOutput.results.slice(commands.length).map(result => getReadableToolOutput(JSON.stringify(result)));
@@ -3456,30 +3701,16 @@ function renderExecToolGroup(record) {
     || (result.exit_code != null && Number(result.exit_code) !== 0))
     || group.eventRecords.some(eventRecord => eventRecord.value?.payload?.success === false);
   const body = [
-    renderKeyValueList([
-      ["Tool", callPayload.name || "exec"],
-      ["Call ID", callPayload.call_id],
-      ["Status", callPayload.status],
-      ["Commands", commands.length || null],
-      ["Plans", updatePlans.length || null],
-      ["Patches", patches.length || null]
-    ]),
     updatePlans.map(renderUpdatePlanMarkdown).join("\n"),
     pairs.length ? `<div class="rollout-tool-results">${pairs.join("")}</div>` : "",
     patches.length ? `<div class="rollout-tool-results">${patches.join("")}</div>` : "",
-    supplementalOutput ? renderLazyCodeDetails("Additional output", supplementalOutput, "text", `record-${record.line}:additional-output`) : "",
-    !commands.length && !updatePlans.length ? renderLazyCodeDetails("Raw exec input", input, "javascript", `record-${record.line}:raw-input`) : ""
+    supplementalOutput ? renderLazyCodeDetails("Additional output", supplementalOutput, "text", `record-${record.line}:additional-output`) : ""
   ].filter(Boolean).join("\n");
-  const title = [
-    "exec",
-    commands.length ? `${formatNumber(commands.length)} command${commands.length === 1 ? "" : "s"}` : "",
-    updatePlans.length ? `${formatNumber(updatePlans.length)} plan${updatePlans.length === 1 ? "" : "s"}` : "",
-    patches.length ? `${formatNumber(patches.length)} patch${patches.length === 1 ? "" : "es"}` : ""
-  ].filter(Boolean).join(" / ");
-  return renderEntry(record, "tool", title, body, {
+  return renderEntry(record, toolRole, "", body, {
     kind: "tool-call",
     className: failed ? "is-error" : "",
-    roleClass: failed ? "rollout-role-error" : "rollout-role-tool"
+    roleClass: failed ? "rollout-role-error" : "rollout-role-tool",
+    roleHtml: renderToolRoleNames(toolNames.length ? toolNames : ["exec"])
   });
 }
 
@@ -3497,18 +3728,16 @@ function renderToolCallGroup(record) {
   const failed = exitCode != null && exitCode !== 0;
   const body = [
     renderKeyValueList([
-      ["Tool", payload.name],
-      ["Call ID", payload.call_id],
-      ["Status", payload.status],
       ["Exit Code", exitCode]
     ]),
     argsText ? renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`) : "",
     group.outputRecord ? renderToolOutputDetails(output, record) : `<p class="rollout-empty">No matching result.</p>`
   ].filter(Boolean).join("\n");
-  return renderEntry(record, "tool", payload.name || "function call", body, {
+  return renderEntry(record, payload.name || "function call", "", body, {
     kind: "tool-call",
     className: failed ? "is-error" : "",
-    roleClass: failed ? "rollout-role-error" : "rollout-role-tool"
+    roleClass: failed ? "rollout-role-error" : "rollout-role-tool",
+    roleHtml: renderToolRoleNames([payload.name || "function call"])
   });
 }
 
@@ -3522,17 +3751,16 @@ function renderFunctionCall(record) {
   const updatePlanMarkdown = isToolName(payload.name, "update_plan") ? renderUpdatePlanMarkdown(args) : "";
   const body = [
     renderKeyValueList([
-      ["Tool", payload.name],
-      ["Call ID", payload.call_id],
       ["Workdir", args && typeof args == "object" && !Array.isArray(args) ? args.workdir : null]
     ]),
     updatePlanMarkdown,
     command ? renderCollapsibleHtml("Command", renderCodeBlock(commandText, "shell"), commandText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:command`) : "",
     updatePlanMarkdown ? "" : command ? renderDetails("Arguments", args, "json", `record-${record.line}:arguments`) : renderCollapsibleHtml("Arguments", renderCodeBlock(argsText, "json"), argsText.length, LONG_CONTENT_COLLAPSE_LENGTH, `record-${record.line}:arguments`)
   ].filter(Boolean).join("\n");
-  return renderEntry(record, "tool", payload.name || "function call", body, {
+  return renderEntry(record, payload.name || "function call", "", body, {
     kind: "tool-call",
-    roleClass: "rollout-role-tool"
+    roleClass: "rollout-role-tool",
+    roleHtml: renderToolRoleNames([payload.name || "function call"])
   });
 }
 
@@ -3541,22 +3769,22 @@ function renderFunctionOutput(record, callById) {
   const output = getReadableToolOutput(payload.output);
   const exitCode = getOutputExitCode(payload.output);
   const call = callById.get(payload.call_id);
-  const title = `output: ${call?.name || payload.call_id || "function call"}`;
+  const role = call?.name || "tool output";
   const className = exitCode != null && exitCode !== 0 ? "is-error" : "";
   const roleClass = exitCode != null && exitCode !== 0 ? "rollout-role-error" : "rollout-role-tool";
   const summary = exitCode == null ? `${formatNumber(output.length)} characters` : `exit ${exitCode}, ${formatNumber(output.length)} characters`;
   const outputHtml = renderLazyCodeDetails(summary, output, "text", `record-${record.line}:output`);
   const body = [
     renderKeyValueList([
-      ["Call ID", payload.call_id],
       ["Exit Code", exitCode]
     ]),
     outputHtml
   ].filter(Boolean).join("\n");
-  return renderEntry(record, "tool", title, body, {
+  return renderEntry(record, role, "", body, {
     kind: "tool-output",
     className,
-    roleClass
+    roleClass,
+    roleHtml: renderToolRoleNames([role])
   });
 }
 
@@ -3567,20 +3795,13 @@ function renderEvent(record) {
   }
   if (payload.type === "patch_apply_end") {
     const body = [
-      renderKeyValueList([
-        ["Type", payload.type],
-        ["Call ID", payload.call_id],
-        ["Turn", payload.turn_id],
-        ["Status", payload.status],
-        ["Success", payload.success]
-      ]),
       renderPatchApplyEndDiff(payload.changes, record),
-      payload.stdout ? renderLazyCodeDetails("stdout", payload.stdout, "text", `record-${record.line}:stdout`) : "",
       payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${record.line}:stderr`) : ""
     ].filter(Boolean).join("\n");
-    return renderEntry(record, "event", payload.type, body, {
+    return renderEntry(record, "apply_patch", "", body, {
       kind: "patch-apply-end",
-      roleClass: payload.success === false ? "rollout-role-error" : "rollout-role-event"
+      roleClass: payload.success === false ? "rollout-role-error" : "rollout-role-tool",
+      roleHtml: renderToolRoleNames(["apply_patch"])
     });
   }
   if (payload.type === "thread_settings_applied") {
@@ -3675,8 +3896,7 @@ function renderUnknown(record) {
   const body = renderKeyValueList([
     ["Type", type],
     ["Role", payload.role],
-    ["ID", payload.id],
-    ["Call ID", payload.call_id]
+    ["ID", payload.id]
   ]);
   return renderEntry(record, "event", type, body || `<p class="rollout-empty">No compact renderer for this event.</p>`, {
     kind: "event"
@@ -3737,6 +3957,7 @@ function renderAssistantSection(section, context) {
   return `
     <details class="rollout-assistant-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
+        ${renderDirectoryPatchStats(section.records)}
         <span class="rollout-assistant-title">${escapeHtml(section.title)}</span>
         <span class="rollout-count">${formatNumber(section.records.length)}</span>
       </summary>
@@ -3762,6 +3983,7 @@ function renderCompactSection(section, context) {
     <details class="rollout-compact-section" id="${escapeAttribute(section.id)}" data-rollout-level="2" data-rollout-body-id="${escapeAttribute(section.id)}">
       <summary>
         <span class="rollout-compact-rule"></span>
+        ${renderDirectoryPatchStats(section.records)}
         <span class="rollout-compact-title">${escapeHtml(section.title)}</span>
         <span class="rollout-compact-rule"></span>
         <span class="rollout-count">${escapeHtml(meta)}</span>
@@ -3801,7 +4023,7 @@ function renderTurnGroup(group, context) {
     <details class="rollout-turn" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}" data-rollout-state-key="${escapeAttribute(group.id)}:body" data-rollout-lazy-turn data-rollout-lazy-key="${escapeAttribute(lazyBodyKey)}">
       <summary>
         <div class="rollout-turn-title">
-          <h2>${escapeHtml(group.isPreamble ? title : `${group.index}. ${title}`)}</h2>
+          <h2>${renderDirectoryPatchStats(group.records)}<span class="rollout-turn-heading-text">${escapeHtml(group.isPreamble ? title : `${group.index}. ${title}`)}</span></h2>
           <p class="rollout-turn-meta">${meta.map(item => `<span>${escapeHtml(item)}</span>`).join("")}</p>
         </div>
         <span class="rollout-count">${formatNumber(group.records.length)}</span>
@@ -3953,14 +4175,14 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section").forEach(node => {
+    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
-      } else if (mode === "level-one") {
+      } else if (mode === "level-one" && level > 1) {
+        node.open = false;
+      } else if (mode === "expand-level-one") {
         node.open = level === 1;
-      } else if (mode === "all") {
-        node.open = true;
       }
     });
   } finally {
@@ -4010,14 +4232,14 @@ function openSidebarRolloutTarget(anchor) {
 }
 
 function initRolloutControls() {
-  document.querySelector("[data-rollout-collapse-all]")?.addEventListener("click", () => {
+  document.querySelector("[data-rollout-collapse-level-zero]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("collapse");
   });
-  document.querySelector("[data-rollout-expand-level-one]")?.addEventListener("click", () => {
+  document.querySelector("[data-rollout-collapse-level-one]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("level-one");
   });
-  document.querySelector("[data-rollout-expand-all]")?.addEventListener("click", () => {
-    setRolloutDirectoryLevel("all");
+  document.querySelector("[data-rollout-expand-level-one]")?.addEventListener("click", () => {
+    setRolloutDirectoryLevel("expand-level-one");
   });
   document.querySelector("[data-rollout-toggle-wrap]")?.addEventListener("click", event => {
     const root = document.querySelector(".codex-rollout");
@@ -4054,10 +4276,13 @@ function initRolloutControls() {
       return;
     }
     const mode = button.dataset.rolloutDiffMode;
-    const diff = button.closest("[data-rollout-diff]");
+    const diff = button.closest("[data-rollout-diff]")
+      || button.closest(".rollout-patch-details")?.querySelector("[data-rollout-diff]");
     if (!mode || !diff) {
       return;
     }
+    event.preventDefault();
+    event.stopPropagation();
     diff.classList.toggle("is-unified", mode === "unified");
     diff.classList.toggle("is-split", mode === "split");
     diff.querySelectorAll("[data-rollout-diff-mode]").forEach(item => {
@@ -4382,9 +4607,6 @@ export async function renderLocalCodexRolloutDocument() {
         const pathname = decodeURIComponent(url.pathname).replace(/\\/g, "/");
         if (url.protocol === "file:") {
           return /(?:^|\/)codex-rollout-viewer\.html$/i.test(pathname);
-        }
-        if (/(?:^|\/)codex-rollout-viewer2\/(?:index\.html)?$/i.test(pathname)) {
-          return false;
         }
         return /(?:^|\/)(?:index\.html)?$/i.test(pathname);
       } catch {
