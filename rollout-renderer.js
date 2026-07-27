@@ -624,7 +624,7 @@ body.codex-rollout-page {
   font-weight: 650;
 }
 
-.rollout-exec-command-head span:last-child {
+.rollout-exec-command-head > span:last-child {
   color: var(--wh-rollout-subtle);
   font-weight: 500;
 }
@@ -871,10 +871,6 @@ pre + .rollout-kv,
   margin-bottom: 6px;
 }
 
-.rollout-patch-details[open] > summary {
-  margin-bottom: 0;
-}
-
 .rollout-diff {
   margin-top: 7px;
   overflow: hidden;
@@ -883,28 +879,17 @@ pre + .rollout-kv,
   background: #0d1117;
 }
 
-.rollout-patch-summary-content {
+.rollout-patch-file-label,
+.rollout-patch-tool-summary {
   display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: calc(100% - 18px);
-  vertical-align: middle;
-}
-
-.rollout-patch-summary-label {
-  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.rollout-patch-summary-label .rollout-diff-path {
-  flex: 1 1 auto;
-}
-
-.rollout-patch-summary-label .rollout-diff-file-stat,
-.rollout-patch-summary-content .rollout-diff-mode {
+.rollout-patch-file-label .rollout-diff-file-stat,
+.rollout-exec-command-head .rollout-diff-mode {
   flex: 0 0 auto;
 }
 
@@ -946,7 +931,7 @@ pre + .rollout-kv,
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 7px 10px;
   cursor: pointer;
   list-style: none;
@@ -965,6 +950,11 @@ pre + .rollout-kv,
 
 .rollout-diff-file[open] > summary::before {
   transform: rotate(90deg);
+}
+
+.rollout-patch-file-title {
+  color: var(--wh-rollout-muted);
+  font-weight: 750;
 }
 
 .rollout-diff-path {
@@ -2068,13 +2058,12 @@ function renderPatchLineStats(additions, deletions) {
   return `<span class="rollout-patch-additions">+${formatNumber(additions)}</span> <span class="rollout-patch-deletions">-${formatNumber(deletions)}</span>`;
 }
 
-function renderPatchFileShell(file, index, record) {
+function renderPatchFileShell(file) {
   const lazyKey = storeLazyRolloutContent(file.lines);
   return `
-    <details class="rollout-diff-file" open data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-file-${index}" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
+    <details class="rollout-diff-file" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
       <summary>
-        <span class="rollout-diff-path">${escapeHtml(file.moveTo ? `${file.path} -> ${file.moveTo}` : file.path)}</span>
-        <span class="rollout-diff-file-stat">${renderPatchLineStats(file.additions, file.deletions)}</span>
+        <span class="rollout-patch-file-label"><span class="rollout-patch-file-title">Patch diff</span><span class="rollout-diff-path">${escapeHtml(file.moveTo ? `${file.path} -> ${file.moveTo}` : file.path)}</span><span class="rollout-diff-file-stat">${renderPatchLineStats(file.additions, file.deletions)}</span></span>
       </summary>
       <div class="rollout-diff-body" data-rollout-diff-file-body></div>
     </details>
@@ -2085,35 +2074,11 @@ function renderPatchFiles(files, record) {
   if (!files.length) {
     return "";
   }
-  const stats = getPatchStats(files);
-  const singleFile = files.length === 1 ? files[0] : null;
-  const singleFileLazyKey = singleFile ? storeLazyRolloutContent(singleFile.lines) : "";
-  const singleFileAttributes = singleFile
-    ? ` data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(singleFileLazyKey)}"`
-    : "";
-  const summaryLabel = singleFile
-    ? `Patch diff <span class="rollout-diff-path">${escapeHtml(singleFile.moveTo ? `${singleFile.path} -> ${singleFile.moveTo}` : singleFile.path)}</span><span class="rollout-diff-file-stat">${renderPatchLineStats(singleFile.additions, singleFile.deletions)}</span>`
-    : `Patch diff, ${formatNumber(stats.files)} files, ${renderPatchLineStats(stats.additions, stats.deletions)}`;
   return `
-    <details class="rollout-details rollout-patch-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:patch"${singleFileAttributes}>
-      <summary><span class="rollout-patch-summary-content">
-        <span class="rollout-patch-summary-label">${summaryLabel}</span>
-        <span class="rollout-diff-mode" role="group" aria-label="Diff view mode">
-          <button type="button" data-rollout-diff-mode="unified" aria-pressed="true">Unified</button>
-          <button type="button" data-rollout-diff-mode="split" aria-pressed="false">Split</button>
-        </span>
-      </span></summary>
-      <div class="rollout-diff is-unified" data-rollout-diff data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-mode">
-        ${singleFile
-          ? `<div class="rollout-diff-body" data-rollout-diff-file-body></div>`
-          : files.map((file, index) => renderPatchFileShell(file, index, record)).join("")}
-      </div>
-    </details>
+    <div class="rollout-diff is-unified" data-rollout-diff data-rollout-state-key="record-${escapeAttribute(record.line)}:patch-mode">
+      ${files.map(file => renderPatchFileShell(file)).join("")}
+    </div>
   `;
-}
-
-function renderPatchApplyEndDiff(changes, record) {
-  return renderPatchFiles(parsePatchApplyEndChanges(changes), record);
 }
 
 function getTimestampMilliseconds(record) {
@@ -3128,15 +3093,25 @@ function renderExecCommandPair(command, result, index, record) {
   `;
 }
 
-function renderAttachedPatchEvent(patchRecord) {
+function renderDiffModeControls() {
+  return `<span class="rollout-diff-mode" role="group" aria-label="Diff view mode">
+    <button type="button" data-rollout-diff-mode="unified" aria-pressed="true">Unified</button>
+    <button type="button" data-rollout-diff-mode="split" aria-pressed="false">Split</button>
+  </span>`;
+}
+
+function renderAttachedPatchEvent(patchRecord, options = {}) {
   const payload = patchRecord.value?.payload ?? {};
+  const files = parsePatchApplyEndChanges(payload.changes);
+  const stats = getPatchStats(files);
+  const idAttribute = options.standalone ? ` id="record-${escapeAttribute(patchRecord.line)}"` : "";
   return `
-    <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""}">
+    <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""} ${options.standalone ? "rollout-entry-anchor" : ""}"${idAttribute}>
       <div class="rollout-exec-command-head">
-        <span>apply_patch</span>
-        ${payload.success === false ? "<span>failed</span>" : ""}
+        <span class="rollout-patch-tool-summary"><span>apply_patch</span>${renderPatchLineStats(stats.additions, stats.deletions)}${payload.success === false ? "<span>failed</span>" : ""}</span>
+        ${renderDiffModeControls()}
       </div>
-      ${renderPatchApplyEndDiff(payload.changes, patchRecord)}
+      ${renderPatchFiles(files, patchRecord)}
       ${payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${patchRecord.line}:stderr`) : ""}
     </section>
   `;
@@ -3260,15 +3235,7 @@ function renderEvent(record) {
     return renderMessage(record);
   }
   if (payload.type === "patch_apply_end") {
-    const body = [
-      renderPatchApplyEndDiff(payload.changes, record),
-      payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${record.line}:stderr`) : ""
-    ].filter(Boolean).join("\n");
-    return renderEntry(record, "apply_patch", "", body, {
-      kind: "patch-apply-end",
-      roleClass: payload.success === false ? "rollout-role-error" : "rollout-role-tool",
-      roleHtml: renderToolRoleNames(["apply_patch"])
-    });
+    return renderAttachedPatchEvent(record, { standalone: true });
   }
   if (payload.type === "thread_settings_applied") {
     const settings = payload.thread_settings ?? {};
@@ -3743,7 +3710,7 @@ function initRolloutControls() {
     }
     const mode = button.dataset.rolloutDiffMode;
     const diff = button.closest("[data-rollout-diff]")
-      || button.closest(".rollout-patch-details")?.querySelector("[data-rollout-diff]");
+      || button.closest(".rollout-exec-command")?.querySelector("[data-rollout-diff]");
     if (!mode || !diff) {
       return;
     }

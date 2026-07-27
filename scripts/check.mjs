@@ -83,6 +83,9 @@ async function checkMarkdownRendering() {
   assert.match(rendererSource, /data-rollout-collapse-level-zero>Collapse L0<\/button>[\s\S]*data-rollout-collapse-level-one>Collapse L1<\/button>[\s\S]*data-rollout-expand-level-one>Expand L1<\/button>/, "directory controls must use explicit collapse and expand labels");
   assert.match(rendererSource, /\.rollout-diff-word-add\s*\{[\s\S]*background: rgba\(63, 185, 80, 0\.42\)/, "word additions must use a stronger green highlight");
   assert.match(rendererSource, /\.rollout-diff-word-delete\s*\{[\s\S]*background: rgba\(255, 107, 107, 0\.42\)/, "word deletions must use a stronger red highlight");
+  assert.match(rendererSource, /\.rollout-exec-command-head > span:last-child\s*\{/, "patch stat colors must not be overridden by the tool-header secondary text rule");
+  assert.match(rendererSource, /\.rollout-diff-file > summary\s*\{[\s\S]*?justify-content: flex-start;/, "patch file rows must stay left aligned");
+  assert.match(rendererSource, /\.rollout-patch-file-title\s*\{[\s\S]*?font-weight: 750;/, "Patch diff file titles must be bold");
   const runnableRenderer = rendererSource
     .replace(/^export\s+/gm, "")
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
@@ -227,27 +230,28 @@ async function checkMarkdownRendering() {
     line: 21,
     value: { type: "event_msg", payload: { type: "patch_apply_end", success: true, status: "completed", changes: patchChanges } }
   });
-  assert.match(patchEndHtml, /Patch diff, 2 files,[\s\S]*rollout-patch-additions">\+3<[\s\S]*rollout-patch-deletions">-1</, "patch_apply_end must render colored stats from its changes data");
+  assert.match(patchEndHtml, /rollout-patch-tool-summary"><span>apply_patch<\/span>[\s\S]*rollout-patch-additions">\+3<[\s\S]*rollout-patch-deletions">-1</, "apply_patch headers must show colored total stats");
   assert.match(patchEndHtml, /src\/old\.js -&gt; src\/new\.js/, "patch_apply_end must render move_path from its changes data");
-  assert.match(patchEndHtml, /<details class="rollout-diff-file" open/, "patch files must be expanded by default");
-  assert.doesNotMatch(patchEndHtml, /files changed/, "patch toolbar must not repeat aggregate file stats");
+  assert.doesNotMatch(patchEndHtml, /<details class="rollout-diff-file" open/, "patch files must be collapsed by default");
+  assert.doesNotMatch(patchEndHtml, /patch-file-\d+/, "patch file open state must not be persisted");
+  assert.equal((patchEndHtml.match(/<details class="rollout-diff-file"/g) || []).length, 2, "multi-file patches must render one flat details entry per file");
   assert.match(
     patchEndHtml,
-    /<summary><span class="rollout-patch-summary-content">[\s\S]*Patch diff, 2 files,[\s\S]*rollout-patch-additions">\+3<[\s\S]*rollout-patch-deletions">-1<[\s\S]*>Unified<[\s\S]*>Split<[\s\S]*<\/span><\/summary>\s*<div class="rollout-diff/,
-    "diff mode controls must share the patch summary line"
+    /rollout-exec-command-head">[\s\S]*apply_patch[\s\S]*>Unified<[\s\S]*>Split<[\s\S]*<\/div>\s*<div class="rollout-diff/,
+    "diff mode controls must share the gray apply_patch header line"
   );
-  assert.doesNotMatch(patchEndHtml, /rollout-diff-toolbar/, "diff mode controls must not occupy a separate toolbar row");
+  assert.doesNotMatch(patchEndHtml, /rollout-patch-details|files changed|Patch diff, 2 files/, "patches must not render an aggregate folding layer or duplicate totals");
   const singlePatchHtml = rendererContext.__rolloutTest.renderEvent({
     line: 22,
     value: { type: "event_msg", payload: { type: "patch_apply_end", success: true, changes: { "src/old.js": patchChanges["src/old.js"] } } }
   });
   assert.match(
     singlePatchHtml,
-    /rollout-patch-summary-label">Patch diff <span class="rollout-diff-path">src\/old\.js -&gt; src\/new\.js<\/span><span class="rollout-diff-file-stat">[\s\S]*rollout-patch-additions">\+1<[\s\S]*rollout-patch-deletions">-1</,
+    /rollout-patch-file-label"><span class="rollout-patch-file-title">Patch diff<\/span><span class="rollout-diff-path">src\/old\.js -&gt; src\/new\.js<\/span><span class="rollout-diff-file-stat">[\s\S]*rollout-patch-additions">\+1<[\s\S]*rollout-patch-deletions">-1<[\s\S]*<\/span><\/span>\s*<\/summary>/,
     "single-file patch summaries must show the path and colored stats directly"
   );
-  assert.match(singlePatchHtml, /rollout-patch-details"[^>]*data-rollout-lazy-diff-file[^>]*>[\s\S]*<div class="rollout-diff-body" data-rollout-diff-file-body><\/div>/, "single-file patch content must remain lazy-loaded in the outer details");
-  assert.doesNotMatch(singlePatchHtml, /<details class="rollout-diff-file"/, "single-file patches must not create a second details layer");
+  assert.equal((singlePatchHtml.match(/<details class="rollout-diff-file"/g) || []).length, 1, "single-file patches must use the same one-details-per-file layout");
+  assert.doesNotMatch(singlePatchHtml, /rollout-patch-details/, "single-file patches must not create an aggregate details layer");
 
   const execInput = [
     "const results = await Promise.all([",
@@ -304,7 +308,7 @@ async function checkMarkdownRendering() {
   assert.equal((groupedExecHtml.match(/>exec_command<\/span>/g) || []).length, 3, "the colored role and each nested command must keep the concrete tool label");
   assert.doesNotMatch(groupedExecHtml, /<dt>(?:Tool|Call ID|Status|Commands|Plans|Patches)<\/dt>|Raw exec input/, "redundant exec metadata and raw wrapper input must be omitted");
   assert.doesNotMatch(groupedExecHtml, />completed<|>success</, "successful status labels must be omitted");
-  assert.match(groupedExecHtml, /Patch diff, 2 files,[\s\S]*rollout-patch-additions">\+3<[\s\S]*rollout-patch-deletions">-1</, "grouped exec must include colored patch stats");
+  assert.match(groupedExecHtml, /apply_patch<\/span>[\s\S]*rollout-patch-additions">\+3<[\s\S]*rollout-patch-deletions">-1/, "grouped exec must show colored total patch stats after apply_patch");
   assert.doesNotMatch(groupedExecHtml, /\[object Object\]/, "grouped tool output must not stringify content blocks as object placeholders");
   assert.deepEqual(
     { ...rendererContext.__rolloutTest.getRecordsPatchStats(combinedExecRecords) },
