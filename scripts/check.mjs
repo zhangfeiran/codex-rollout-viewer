@@ -86,12 +86,14 @@ async function checkMarkdownRendering() {
   assert.match(rendererSource, /\.rollout-exec-command-head > span:last-child\s*\{/, "patch stat colors must not be overridden by the tool-header secondary text rule");
   assert.match(rendererSource, /\.rollout-diff-file > summary\s*\{[\s\S]*?justify-content: flex-start;/, "patch file rows must stay left aligned");
   assert.match(rendererSource, /\.rollout-patch-file-title\s*\{[\s\S]*?font-weight: 750;/, "Patch diff file titles must be bold");
+  assert.match(rendererSource, /\.rollout-final-answer-turn\s*\{[\s\S]*?width: calc\(100% - 28px\);[\s\S]*?margin-left: 28px;/, "final-answer turns must be narrower and indented on desktop");
+  assert.match(rendererSource, /@media \(max-width: 640px\)[\s\S]*?\.rollout-final-answer-turn\s*\{[\s\S]*?width: calc\(100% - 12px\);[\s\S]*?margin-left: 12px;/, "final-answer turns must keep a smaller mobile indent");
   const runnableRenderer = rendererSource
     .replace(/^export\s+/gm, "")
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupSections, createRenderableRecords, getReadableToolOutput, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFunctionCall, renderMarkdownContent, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -252,6 +254,45 @@ async function checkMarkdownRendering() {
   );
   assert.equal((singlePatchHtml.match(/<details class="rollout-diff-file"/g) || []).length, 1, "single-file patches must use the same one-details-per-file layout");
   assert.doesNotMatch(singlePatchHtml, /rollout-patch-details/, "single-file patches must not create an aggregate details layer");
+
+  const completedTurnRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 40, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Original request" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } },
+    { line: 41, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } },
+    { line: 42, value: { type: "event_msg", payload: { type: "patch_apply_end", turn_id: "turn-original", success: true, changes: { "src/old.js": patchChanges["src/old.js"] } } } },
+    { line: 43, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Steer while working" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
+    { line: 44, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Steered update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
+    { line: 45, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "\nFinished result\n\nMore details" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } }
+  ]);
+  const completedGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords);
+  const originalSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[0]);
+  const steerSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[1]);
+  const finalSection = rendererContext.__rolloutTest.buildGroupFinalAnswer(completedGroups[0]);
+  assert.ok(finalSection, "a user turn with a matching final_answer must receive a final section");
+  assert.equal(finalSection.title, "Finished result", "the final section title must use the first non-empty final-answer body line");
+  assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(completedGroups[1]), null, "a steer turn without final_answer must not receive a final section");
+  assert.equal(originalSections.some(section => section.kind === "final"), false, "final_answer must not be nested inside the user turn sections");
+  assert.deepEqual(Array.from(finalSection.records, record => record.line), [45], "the final section must contain only final_answer records");
+  assert.equal(originalSections.some(section => section.records.includes(finalSection.records[0])), false, "final_answer must be removed from commentary sections");
+  assert.equal(steerSections.some(section => section.records.includes(finalSection.records[0])), false, "a final_answer from an earlier turn must not render inside the steer turn");
+  const repeatedPatchFiles = rendererContext.__rolloutTest.getRecordsPatchFiles([
+    { line: 46, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": patchChanges["src/old.js"] } } } },
+    { line: 47, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": { ...patchChanges["src/old.js"], unified_diff: "@@ -2 +2 @@\n-before\n+after\n" }, "src/added.js": patchChanges["src/added.js"] } } } }
+  ]);
+  assert.deepEqual(
+    Array.from(repeatedPatchFiles, file => [file.path, file.additions, file.deletions]),
+    [["src/old.js", 2, 2], ["src/added.js", 2, 0]],
+    "final summaries must merge repeated patches into one entry per changed file"
+  );
+  const finalHtml = rendererContext.__rolloutTest.renderFinalAnswerSection({ ...finalSection, patchFiles: repeatedPatchFiles }, { callById: new Map() });
+  assert.match(finalHtml, /1\. Finished result[\s\S]*final_answer[\s\S]*Finished result[\s\S]*More details[\s\S]*Changed files/, "final sections must use one body line as the title and render the full answer before changed files");
+  assert.match(finalHtml, /class="rollout-turn rollout-final-answer-turn"[\s\S]*data-rollout-level="1"/, "final sections must render as level-one turn siblings");
+  assert.doesNotMatch(finalHtml, /rollout-assistant-section|data-rollout-level="2"/, "final sections must not use the nested assistant-section structure");
+  assert.doesNotMatch(finalHtml, /Working update|Steered update/, "final sections must not include commentary messages");
+  assert.equal((finalHtml.match(/<details class="rollout-diff-file"/g) || []).length, 2, "final summaries must render one aggregate diff entry per changed file");
+  assert.equal((finalHtml.match(/src\/old\.js/g) || []).length, 1, "a repeatedly edited file must appear only once in the aggregate diff");
+  const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
+  assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-45"/, "the final section must follow its user turn as a sibling");
+  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-45">1\. Finished result<\/a>/, "the outline final-answer link must use the same one-line body title");
 
   const execInput = [
     "const results = await Promise.all([",

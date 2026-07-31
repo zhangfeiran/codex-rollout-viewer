@@ -249,6 +249,13 @@ body.codex-rollout-page {
   text-decoration: none;
 }
 
+.rollout-tree > .rollout-final-answer-link {
+  width: calc(100% - 14px);
+  margin-left: 14px;
+  color: var(--wh-rollout-green);
+  font-size: 11px;
+}
+
 .rollout-tree details {
   border-left: 1px solid var(--wh-rollout-border-muted);
 }
@@ -423,6 +430,32 @@ body.codex-rollout-page {
 
 .rollout-assistant-body {
   min-width: 0;
+}
+
+.rollout-final-answer-turn {
+  width: calc(100% - 28px);
+  margin-left: 28px;
+  box-sizing: border-box;
+  border-color: rgba(63, 185, 80, 0.3);
+  border-radius: 6px;
+  background: rgba(63, 185, 80, 0.025);
+}
+
+.rollout-final-answer-turn > summary {
+  padding: 6px 9px;
+  background: rgba(63, 185, 80, 0.07);
+}
+
+.rollout-final-answer-turn .rollout-turn-title h2 {
+  font-size: 13px;
+}
+
+.rollout-final-answer-turn .rollout-turn-meta {
+  font-size: 10px;
+}
+
+.rollout-final-changes {
+  border-top: 1px solid var(--wh-rollout-border-muted);
 }
 
 .rollout-compact-section {
@@ -1151,6 +1184,11 @@ pre + .rollout-kv,
 
   .rollout-turn > summary .rollout-count {
     display: none;
+  }
+
+  .rollout-final-answer-turn {
+    width: calc(100% - 12px);
+    margin-left: 12px;
   }
 
   .rollout-kv {
@@ -2107,9 +2145,9 @@ function getSessionMeta(records) {
 }
 
 function getTurnId(record) {
-  return record.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
-    ?? record.value?.payload?.turn_id
-    ?? record.value?.turn_id
+  return record?.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
+    ?? record?.value?.payload?.turn_id
+    ?? record?.value?.turn_id
     ?? null;
 }
 
@@ -2214,6 +2252,9 @@ function getMessageDedupKey(record) {
 }
 
 function getRecordPriority(record) {
+  if (record.value?.type === "response_item" && record.value?.payload?.phase === "final_answer") {
+    return 4;
+  }
   if (record.value?.type === "response_item" && getPayloadType(record) === "message") {
     return 3;
   }
@@ -2338,6 +2379,10 @@ function summarizeText(value, maxLength = 90) {
 
 function getFullTitleText(value) {
   return getCompactText(value) || "No text";
+}
+
+function getFirstNonEmptyLine(value, fallback = "No text") {
+  return String(value ?? "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || fallback;
 }
 
 function getRecordKind(record) {
@@ -2796,6 +2841,24 @@ function buildGroups(records) {
   if (current.isPreamble && current.records.length && !groups.includes(current)) {
     groups.push(current);
   }
+
+  const groupByTurnId = new Map();
+  for (const group of groups) {
+    group.summaryRecords = [...group.records];
+    const userRecord = group.records.find(isUserMessageRecord);
+    const turnId = getTurnId(userRecord);
+    if (turnId) {
+      groupByTurnId.set(turnId, group);
+    }
+  }
+  for (const sourceGroup of groups) {
+    for (const record of sourceGroup.records) {
+      const targetGroup = groupByTurnId.get(getTurnId(record));
+      if (targetGroup && targetGroup !== sourceGroup && !targetGroup.summaryRecords.includes(record)) {
+        targetGroup.summaryRecords.push(record);
+      }
+    }
+  }
   return groups;
 }
 
@@ -2852,6 +2915,35 @@ function getRecordsPatchStats(records) {
   };
 }
 
+function getRecordsPatchFiles(records) {
+  const filesByPath = new Map();
+  const seen = new Set();
+  for (const record of records) {
+    for (const candidate of [record, ...(record.toolGroup?.eventRecords || [])]) {
+      if (seen.has(candidate) || getPayloadType(candidate) !== "patch_apply_end") {
+        continue;
+      }
+      seen.add(candidate);
+      for (const file of parsePatchApplyEndChanges(candidate.value?.payload?.changes)) {
+        const key = `${file.path}\u0000${file.moveTo || ""}`;
+        const existing = filesByPath.get(key);
+        if (existing) {
+          existing.lines.push(...file.lines);
+          existing.additions += file.additions;
+          existing.deletions += file.deletions;
+          existing.changeType = file.changeType === "delete" ? "delete" : existing.changeType;
+        } else {
+          filesByPath.set(key, {
+            ...file,
+            lines: [...file.lines]
+          });
+        }
+      }
+    }
+  }
+  return [...filesByPath.values()];
+}
+
 function renderDirectoryPatchStats(records) {
   const stats = getRecordsPatchStats(records);
   return `<span class="rollout-directory-patch-stats">${stats.patches ? `
@@ -2867,6 +2959,12 @@ function buildGroupSections(group) {
   let currentActivitySection = null;
 
   for (const record of group.records) {
+    if (isFinalAnswerRecord(record)) {
+      currentAssistantSection = null;
+      currentCompactSection = null;
+      currentActivitySection = null;
+      continue;
+    }
     if (isAgentOutputRecord(record)) {
       currentCompactSection = null;
       currentActivitySection = null;
@@ -2956,6 +3054,39 @@ function buildGroupSections(group) {
   return sections;
 }
 
+function buildGroupFinalAnswer(group) {
+  const finalAnswerRecord = getGroupFinalAnswerRecord(group);
+  if (!finalAnswerRecord) {
+    return null;
+  }
+  return {
+    id: `final-${finalAnswerRecord.line}`,
+    title: getFirstNonEmptyLine(getMessageText(finalAnswerRecord), "Final answer"),
+    records: [finalAnswerRecord],
+    patchFiles: getRecordsPatchFiles(group.summaryRecords || group.records),
+    groupIndex: group.index
+  };
+}
+
+function isFinalAnswerRecord(record) {
+  return isAgentOutputRecord(record) && record.value?.payload?.phase === "final_answer";
+}
+
+function getGroupFinalAnswerRecord(group) {
+  if (group.isPreamble) {
+    return null;
+  }
+  const userRecord = group.records.find(isUserMessageRecord);
+  const userTurnId = getTurnId(userRecord);
+  return [...(group.summaryRecords || group.records)].reverse().find(record => {
+    if (!isFinalAnswerRecord(record)) {
+      return false;
+    }
+    const finalTurnId = getTurnId(record);
+    return !userTurnId || !finalTurnId || finalTurnId === userTurnId;
+  }) || null;
+}
+
 function renderSidebar(records, groups, errors, callById, options = {}) {
   const session = getSessionMeta(records);
   const fileName = options.fileName || getFileName(options.sourceUrl);
@@ -2971,7 +3102,7 @@ function renderSidebar(records, groups, errors, callById, options = {}) {
       <nav class="rollout-tree">
         <a href="#rollout-top">${escapeHtml(session?.id || fileName)}</a>
         ${errors.length ? `<a href="#parse-errors">Parse errors (${formatNumber(errors.length)})</a>` : ""}
-        ${groups.map(group => renderSidebarGroup(group, callById)).join("")}
+        ${groups.map(group => `${renderSidebarGroup(group, callById)}${renderSidebarFinalAnswer(group)}`).join("")}
       </nav>
     </aside>
   `;
@@ -2997,6 +3128,11 @@ function renderSidebarGroup(group, callById) {
 function renderSidebarAssistantSection(section, callById) {
   const title = section.navTitle || section.title;
   return `<a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>`;
+}
+
+function renderSidebarFinalAnswer(group) {
+  const section = buildGroupFinalAnswer(group);
+  return section ? `<a class="rollout-final-answer-link" href="#${escapeAttribute(section.id)}">${escapeHtml(`${group.index}. ${section.title}`)}</a>` : "";
 }
 
 function renderEntry(record, role, title, body, options = {}) {
@@ -3428,6 +3564,37 @@ function renderCompactSection(section, context) {
   `;
 }
 
+function renderFinalAnswerSection(section, context) {
+  const finalRecord = section.records[0];
+  const stats = getPatchStats(section.patchFiles);
+  const patchRecord = {
+    line: `${finalRecord.line}-final-summary`
+  };
+  return `
+    <details class="rollout-turn rollout-final-answer-turn" id="${escapeAttribute(section.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+      <summary>
+        <div class="rollout-turn-title">
+          <h2><span class="rollout-directory-patch-stats">${section.patchFiles.length ? renderPatchLineStats(stats.additions, stats.deletions) : ""}</span><span class="rollout-turn-heading-text">${escapeHtml(`${section.groupIndex}. ${section.title}`)}</span></h2>
+          <p class="rollout-turn-meta"><span>final_answer</span><span>${formatNumber(section.patchFiles.length)} changed files</span></p>
+        </div>
+        <span class="rollout-count">${formatNumber(section.patchFiles.length)} changed files</span>
+      </summary>
+      <div class="rollout-turn-body">
+        ${renderRecord(finalRecord, context)}
+        ${section.patchFiles.length ? `
+          <section class="rollout-final-changes">
+            <div class="rollout-exec-command-head">
+              <span class="rollout-patch-tool-summary"><span>Changed files</span>${renderPatchLineStats(stats.additions, stats.deletions)}</span>
+              ${renderDiffModeControls()}
+            </div>
+            ${renderPatchFiles(section.patchFiles, patchRecord)}
+          </section>
+        ` : ""}
+      </div>
+    </details>
+  `;
+}
+
 function renderGroupSection(section, context) {
   if (section.standalone) {
     return section.records.map(record => renderRecord(record, context)).join("");
@@ -3464,6 +3631,11 @@ function renderTurnGroup(group, context) {
       <div class="rollout-turn-body" data-rollout-lazy-turn-body></div>
     </details>
   `;
+}
+
+function renderTurnGroupWithFinalAnswer(group, context) {
+  const finalAnswer = buildGroupFinalAnswer(group);
+  return `${renderTurnGroup(group, context)}${finalAnswer ? renderFinalAnswerSection(finalAnswer, context) : ""}`;
 }
 
 function createMeta(name, content) {
@@ -3517,7 +3689,7 @@ function renderDocument(records, errors, options = {}) {
       ${renderHeader(records, errors, { fileName, sourceUrl })}
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
-        ${groups.map(group => renderTurnGroup(group, context)).join("")}
+        ${groups.map(group => renderTurnGroupWithFinalAnswer(group, context)).join("")}
       </section>
     </main>
   `;
