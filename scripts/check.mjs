@@ -268,7 +268,7 @@ async function checkMarkdownRendering() {
   const steerSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[1]);
   const finalSection = rendererContext.__rolloutTest.buildGroupFinalAnswer(completedGroups[0]);
   assert.ok(finalSection, "a user turn with a matching final_answer must receive a final section");
-  assert.equal(finalSection.title, "Finished result", "the final section title must use the first non-empty final-answer body line");
+  assert.equal(finalSection.title, "Finished result More details", "the final section title must collapse the full final-answer body into one line");
   assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(completedGroups[1]), null, "a steer turn without final_answer must not receive a final section");
   assert.equal(originalSections.some(section => section.kind === "final"), false, "final_answer must not be nested inside the user turn sections");
   assert.deepEqual(Array.from(finalSection.records, record => record.line), [45], "the final section must contain only final_answer records");
@@ -284,7 +284,7 @@ async function checkMarkdownRendering() {
     "final summaries must merge repeated patches into one entry per changed file"
   );
   const finalHtml = rendererContext.__rolloutTest.renderFinalAnswerSection({ ...finalSection, patchFiles: repeatedPatchFiles }, { callById: new Map() });
-  assert.match(finalHtml, /1\. Finished result[\s\S]*final_answer[\s\S]*Finished result[\s\S]*More details[\s\S]*Changed files/, "final sections must use one body line as the title and render the full answer before changed files");
+  assert.match(finalHtml, /1\. Finished result More details[\s\S]*final_answer[\s\S]*Finished result[\s\S]*More details[\s\S]*Changed files/, "final sections must collapse the full body into a one-line title and render the original answer before changed files");
   assert.match(finalHtml, /class="rollout-turn rollout-final-answer-turn"[\s\S]*data-rollout-level="1"/, "final sections must render as level-one turn siblings");
   assert.doesNotMatch(finalHtml, /rollout-assistant-section|data-rollout-level="2"/, "final sections must not use the nested assistant-section structure");
   assert.doesNotMatch(finalHtml, /Working update|Steered update/, "final sections must not include commentary messages");
@@ -292,7 +292,7 @@ async function checkMarkdownRendering() {
   assert.equal((finalHtml.match(/src\/old\.js/g) || []).length, 1, "a repeatedly edited file must appear only once in the aggregate diff");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
   assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-45"/, "the final section must follow its user turn as a sibling");
-  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-45">1\. Finished result<\/a>/, "the outline final-answer link must use the same one-line body title");
+  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-45">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");
 
   const execInput = [
     "const results = await Promise.all([",

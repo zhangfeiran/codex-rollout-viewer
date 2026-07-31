@@ -2381,10 +2381,6 @@ function getFullTitleText(value) {
   return getCompactText(value) || "No text";
 }
 
-function getFirstNonEmptyLine(value, fallback = "No text") {
-  return String(value ?? "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || fallback;
-}
-
 function getRecordKind(record) {
   const payloadType = getPayloadType(record);
   const role = getPayloadRole(record);
@@ -3061,7 +3057,7 @@ function buildGroupFinalAnswer(group) {
   }
   return {
     id: `final-${finalAnswerRecord.line}`,
-    title: getFirstNonEmptyLine(getMessageText(finalAnswerRecord), "Final answer"),
+    title: getCompactText(getMessageText(finalAnswerRecord)) || "Final answer",
     records: [finalAnswerRecord],
     patchFiles: getRecordsPatchFiles(group.summaryRecords || group.records),
     groupIndex: group.index
