@@ -34,28 +34,6 @@
       line-height: 1.45;
     }
 
-    .standalone-shell {
-      display: grid;
-      min-height: 100vh;
-      place-items: center;
-      padding: 22px;
-    }
-
-    .standalone-drop-zone {
-      display: grid;
-      gap: 14px;
-      width: min(720px, 100%);
-      padding: 28px;
-      border: 1px dashed var(--standalone-border);
-      border-radius: 8px;
-      background: var(--standalone-panel);
-    }
-
-    body.is-dragging .standalone-drop-zone {
-      border-color: var(--standalone-blue);
-      background: var(--standalone-panel-strong);
-    }
-
     .standalone-eyebrow {
       margin: 0;
       color: var(--standalone-subtle);
@@ -63,24 +41,6 @@
       font-weight: 700;
       letter-spacing: 0;
       text-transform: uppercase;
-    }
-
-    .standalone-drop-zone h1 {
-      margin: 0;
-      font-size: 22px;
-      line-height: 1.2;
-    }
-
-    .standalone-drop-zone p {
-      margin: 0;
-      color: var(--standalone-muted);
-    }
-
-    .standalone-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
     }
 
     .standalone-file-button {
@@ -508,26 +468,12 @@
   </style>
 </head>
 <body>
-  <main class="standalone-shell">
-    <section class="standalone-drop-zone" data-drop-zone>
+  <main class="standalone-index-shell">
+    <header class="standalone-index-header">
       <p class="standalone-eyebrow">Codex Rollout Viewer</p>
-      <h1>Open Codex rollout sessions</h1>
-      <p>Add or choose remembered sessions folders, choose a folder, or drop JSONL files.</p>
-      <div class="standalone-actions">
-        <button class="standalone-file-button" type="button" data-open-sessions-directory>Add sessions folder</button>
-        <button class="standalone-file-button" type="button" data-saved-directories hidden>Sessions folders</button>
-        <button class="standalone-file-button" type="button" data-open-jsonl-file>Choose JSONL</button>
-        <label class="standalone-file-button">
-          <input type="file" webkitdirectory multiple data-folder-input>
-          Choose folder
-        </label>
-        <label class="standalone-file-button" data-file-input-fallback>
-          <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input>
-          Choose JSONL file
-        </label>
-      </div>
-      <p class="standalone-status" data-status>Waiting for sessions access.</p>
-    </section>
+      <h1>Sessions folders</h1>
+      <p class="standalone-status" data-status>Loading remembered sessions folders...</p>
+    </header>
   </main>
 
   <script type="module">
@@ -4924,15 +4870,12 @@ export async function renderLocalCodexRolloutDocument() {
       });
     }
 
-    function renderActionControls() {
+    function renderActionControls(options = {}) {
+      const showFoldersButton = options.showFoldersButton !== false;
       return `
         <button class="standalone-file-button" type="button" data-open-sessions-directory>Add sessions folder</button>
-        <button class="standalone-file-button" type="button" data-saved-directories ${savedDirectoryEntries.length ? "" : "hidden"}>${savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders"}</button>
+        ${showFoldersButton ? `<button class="standalone-file-button" type="button" data-saved-directories ${savedDirectoryEntries.length ? "" : "hidden"}>${savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders"}</button>` : ""}
         <button class="standalone-file-button" type="button" data-open-jsonl-file ${window.showOpenFilePicker ? "" : "hidden"}>Choose JSONL</button>
-        <label class="standalone-file-button">
-          <input type="file" webkitdirectory multiple data-folder-input>
-          Choose folder
-        </label>
         <label class="standalone-file-button" data-file-input-fallback ${window.showOpenFilePicker ? "hidden" : ""}>
           <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input>
           Choose JSONL file
@@ -4953,28 +4896,6 @@ export async function renderLocalCodexRolloutDocument() {
       style.textContent = STANDALONE_CSS;
       document.head.replaceChildren(charset, viewport, titleElement, style);
       delete document.documentElement.dataset.codexRolloutRendered;
-    }
-
-    function renderHome() {
-      saveCurrentView({ kind: "home", savedAt: Date.now() });
-      installStandaloneHead();
-      document.body.className = "";
-      document.body.innerHTML = `
-        <main class="standalone-shell">
-          <section class="standalone-drop-zone" data-drop-zone>
-            <p class="standalone-eyebrow">Codex Rollout Viewer</p>
-            <h1>Open Codex rollout sessions</h1>
-            <p>Add or choose remembered sessions folders, choose a folder, or drop JSONL files.</p>
-            <div class="standalone-actions">
-              ${renderActionControls()}
-            </div>
-            <p class="standalone-status" data-status>Waiting for sessions access.</p>
-          </section>
-        </main>
-      `;
-      updateDefaultPathHint();
-      updateSavedDirectoryButtons();
-      installWorkspaceBar();
     }
 
     async function renderDirectorySelectionPage(notice = "") {
@@ -4998,7 +4919,7 @@ export async function renderLocalCodexRolloutDocument() {
               <span class="standalone-chip">${escapeHtml(getDefaultSessionsPathHint())}</span>
             </p>
             <div class="standalone-index-actions">
-              ${renderActionControls()}
+              ${renderActionControls({ showFoldersButton: false })}
             </div>
             <p class="standalone-status" data-status>${escapeHtml(notice || "Choose a remembered sessions folder, or add another one.")}</p>
           </header>
@@ -5551,52 +5472,8 @@ export async function renderLocalCodexRolloutDocument() {
         .map(file => createSourceFromFile(file, file.webkitRelativePath || file.name));
     }
 
-    function readEntryFile(entry) {
-      return new Promise((resolve, reject) => entry.file(resolve, reject));
-    }
-
-    function readDirectoryEntries(reader) {
-      return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-    }
-
-    async function* walkDroppedEntry(entry, basePath = "") {
-      const relativePath = basePath ? `${basePath}/${entry.name}` : entry.name;
-      if (entry.isFile) {
-        if (isJsonlFileName(entry.name)) {
-          const file = await readEntryFile(entry);
-          yield createSourceFromFile(file, relativePath);
-        }
-        return;
-      }
-      if (!entry.isDirectory) {
-        return;
-      }
-      const reader = entry.createReader();
-      while (true) {
-        const entries = await readDirectoryEntries(reader);
-        if (!entries.length) {
-          break;
-        }
-        for (const child of entries) {
-          yield* walkDroppedEntry(child, relativePath);
-        }
-      }
-    }
-
-    async function getSourcesFromDrop(dataTransfer) {
-      const entries = [...(dataTransfer?.items || [])]
-        .map(item => item.webkitGetAsEntry?.())
-        .filter(Boolean);
-      if (!entries.length) {
-        return getSourcesFromFiles(dataTransfer?.files || []);
-      }
-      const sources = [];
-      for (const entry of entries) {
-        for await (const source of walkDroppedEntry(entry)) {
-          sources.push(source);
-        }
-      }
-      return sources;
+    function getSourcesFromDrop(dataTransfer) {
+      return getSourcesFromFiles(dataTransfer?.files || []);
     }
 
     async function getSourceLastModified(source) {
@@ -6089,7 +5966,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     async function chooseSessionsDirectory() {
       if (!window.showDirectoryPicker) {
-        setStatus("Directory picker is unavailable in this browser. Use Choose folder instead.", true);
+        setStatus("Directory picker is unavailable in this browser.", true);
         return;
       }
       try {
@@ -6622,11 +6499,7 @@ export async function renderLocalCodexRolloutDocument() {
       if (await restoreSavedIndexView(savedView)) {
         return;
       }
-      if (savedView?.kind === "folders" && savedDirectoryEntries.length) {
-        await renderDirectorySelectionPage();
-        return;
-      }
-      renderHome();
+      await renderDirectorySelectionPage();
     }
 
     async function activateWorkspaceSlot(id) {
@@ -6650,7 +6523,7 @@ export async function renderLocalCodexRolloutDocument() {
       }, workspaceSlots.length);
       workspaceSlots.push(slot);
       await setActiveWorkspaceSlotId(slot.id, { render: false });
-      renderHome();
+      await renderDirectorySelectionPage();
     }
 
     async function deleteWorkspaceSlotState(id) {
@@ -6915,7 +6788,7 @@ export async function renderLocalCodexRolloutDocument() {
       }
       if (!isCodexRolloutRecords(parsedResult.parsed.records)) {
         if (slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion) {
-          renderHome();
+          await renderDirectorySelectionPage();
           setStatus(`${source.name} does not look like a Codex rollout JSONL file.`, true);
         }
         return false;
@@ -7056,11 +6929,7 @@ export async function renderLocalCodexRolloutDocument() {
           return;
         }
       }
-      if (savedDirectoryEntries.length) {
-        await renderDirectorySelectionPage();
-      } else {
-        renderHome();
-      }
+      await renderDirectorySelectionPage();
     }
 
     document.addEventListener("click", async event => {
@@ -7167,11 +7036,6 @@ export async function renderLocalCodexRolloutDocument() {
           selectedDirectoryEntry = null;
           loadRolloutSources(sources, "Selected JSONL files");
         }
-      } else if (event.target.matches("[data-folder-input]")) {
-        const sources = getSourcesFromFiles(event.target.files || []);
-        event.target.value = "";
-        selectedDirectoryEntry = null;
-        loadRolloutSources(sources, "Selected folder");
       }
     });
 
@@ -7236,14 +7100,6 @@ export async function renderLocalCodexRolloutDocument() {
         return;
       }
       if (await restoreSavedIndexView(savedView)) {
-        return;
-      }
-      if (savedView?.kind === "folders" && savedDirectoryEntries.length) {
-        await renderDirectorySelectionPage();
-        return;
-      }
-      if (savedView?.kind === "home" || !savedDirectoryEntries.length) {
-        renderHome();
         return;
       }
       await renderDirectorySelectionPage();

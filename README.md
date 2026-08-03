@@ -8,7 +8,7 @@ Use the hosted GitHub Pages version:
 
 https://zhangfeiran.github.io/codex-rollout-viewer/
 
-Open the page in Chrome, then use `Add sessions folder` to remember one or more `.codex/sessions` folders, choose a remembered folder from `Sessions folders`, use `Choose JSONL`, or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded. Browsers do not expose absolute folder paths to the page, so remembered folders can store an editable display path.
+Open the page in Chrome to enter the `Sessions folders` page directly. Use `Add sessions folder` to remember one or more `.codex/sessions` folders, then open a folder from that remembered list. You can also use `Choose JSONL` or drag and drop rollout files. The viewer runs fully in the browser; local JSONL files and session folders are read only after browser file-permission prompts and are not uploaded. Browsers do not expose absolute folder paths to the page, so remembered folders can store an editable display path.
 
 The session bar tracks multiple rollout files in one viewer. Opening another rollout creates a separate session when the current session already has a file. Each session keeps its own file handle, view state, expanded/collapsed state, incremental parse cache, and automatic-refresh interval. Use `Refresh` for the active session, `Refresh all` for every tracked file, or select an automatic interval per session. `New window` clones the active session into a newly generated `?slot=...` URL: the file and current state are inherited once, then the two windows save and refresh independently. Double-click a session tab to rename it.
 

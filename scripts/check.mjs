@@ -55,6 +55,7 @@ async function checkLocalHtml(fileName) {
   if (embeddedRenderer.replace(/\r\n/g, "\n") !== renderer) {
     throw new Error(`${fileName} embedded rollout renderer is out of sync with rollout-renderer.js`);
   }
+  assert.doesNotMatch(html, /Add or choose remembered sessions folders|data-folder-input|Choose folder/, "the removed home and transient folder picker must not remain in the local viewer");
 
   const bootScript = html.slice(endIndex + end.length, html.indexOf("</script>", endIndex));
   try {
@@ -73,6 +74,10 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /data-popout-workspace-slot/, "workspace slots must support independent windows");
   assert.match(bootScript, /url\.searchParams\.set\("slot", newSlotId\)/, "each independent window must receive a newly generated slot id");
   assert.match(bootScript, /saveCurrentRollout\(rollout, newSlotId\)/, "independent windows must clone rollout state into their own storage keys");
+  assert.doesNotMatch(bootScript, /function renderHome\s*\(/, "the viewer must not keep a separate home screen");
+  assert.doesNotMatch(bootScript, /walkDroppedEntry|webkitGetAsEntry/, "dropped folders must not bypass the remembered sessions-folders flow");
+  assert.match(bootScript, /function getSourcesFromDrop\(dataTransfer\)\s*\{\s*return getSourcesFromFiles\(dataTransfer\?\.files \|\| \[\]\);\s*\}/, "drop handling must accept JSONL files without recursively reading folders");
+  assert.match(bootScript, /await renderDirectorySelectionPage\(\);\s*\}\)\(\);/, "startup must fall through directly to the sessions-folders page");
 }
 
 async function checkMarkdownRendering() {
