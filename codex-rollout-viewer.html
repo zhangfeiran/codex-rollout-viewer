@@ -532,6 +532,7 @@ const LONG_OUTPUT_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
+let rawMessageMarkdownStore = new Map();
 
 const ROLLOUT_CSS = `
 :root {
@@ -1050,6 +1051,26 @@ body.codex-rollout-page {
   align-content: start;
   gap: 4px;
   min-width: 0;
+}
+
+.rollout-copy-markdown {
+  justify-self: start;
+  min-height: 22px;
+  padding: 2px 7px;
+  color: var(--wh-rollout-muted);
+  background: var(--wh-rollout-panel-soft);
+  border: 1px solid var(--wh-rollout-border);
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.rollout-copy-markdown:hover,
+.rollout-copy-markdown:focus-visible {
+  color: var(--wh-rollout-fg);
+  background: var(--wh-rollout-panel-strong);
 }
 
 .rollout-entry-title {
@@ -2750,6 +2771,12 @@ function getMessageText(record) {
   return getMessageBlocks(record).map(block => block.text).join("\n\n");
 }
 
+function storeRawMessageMarkdown(record, markdown) {
+  const key = `message-${record.line}-${rawMessageMarkdownStore.size + 1}`;
+  rawMessageMarkdownStore.set(key, markdown);
+  return key;
+}
+
 function normalizeMessageForDedup(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -3660,6 +3687,7 @@ function renderEntry(record, role, title, body, options = {}) {
         <span class="rollout-role ${roleClass} ${options.roleHtml ? "has-tool-role-names" : ""}">${options.roleHtml || escapeHtml(role || "event")}</span>
         <span class="rollout-entry-title">${escapeHtml(timestamp || title)}</span>
         <span class="rollout-line">line ${line}</span>
+        ${options.headActionHtml || ""}
       </div>
       <div class="rollout-entry-body">
         ${title ? `<div class="rollout-entry-meta"><span>${escapeHtml(title)}</span></div>` : ""}
@@ -3675,6 +3703,10 @@ function renderMessage(record) {
   const phase = payload.phase ? `phase: ${payload.phase}` : "";
   const blocks = getMessageBlocks(record);
   const text = getMessageText(record);
+  const canonicalRole = getCanonicalMessageRole(record);
+  const rawMarkdownKey = ["user", "assistant"].includes(canonicalRole)
+    ? storeRawMessageMarkdown(record, text)
+    : "";
   const shouldCollapse = role !== "assistant"
     && (role === "developer" || role === "system" || text.length > LONG_MESSAGE_COLLAPSE_LENGTH);
   const body = blocks.length ? blocks.map(block => `
@@ -3687,7 +3719,10 @@ function renderMessage(record) {
     ? `<details class="rollout-details" data-rollout-state-key="record-${escapeAttribute(record.line)}:message"><summary>${escapeHtml(role)} message, ${formatNumber(text.length)} characters</summary>${body}</details>`
     : body;
   return renderEntry(record, role, `${role} message${phase ? ` (${phase})` : ""}`, visibleBody, {
-    kind: getRecordKind(record)
+    kind: getRecordKind(record),
+    headActionHtml: rawMarkdownKey
+      ? `<button class="rollout-copy-markdown" type="button" data-rollout-copy-markdown="${escapeAttribute(rawMarkdownKey)}" title="Copy raw Markdown">Copy MD</button>`
+      : ""
   });
 }
 
@@ -4162,6 +4197,7 @@ function createMeta(name, content) {
 
 function renderDocument(records, errors, options = {}) {
   lazyRolloutContentStore = new Map();
+  rawMessageMarkdownStore = new Map();
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
@@ -4351,6 +4387,39 @@ function openSidebarRolloutTarget(anchor) {
   return true;
 }
 
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Local file pages can deny the async Clipboard API.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Browser denied clipboard access.");
+  }
+}
+
+function showCopyMarkdownResult(button, label) {
+  clearTimeout(button._rolloutCopyResetTimer);
+  button.textContent = label;
+  button._rolloutCopyResetTimer = setTimeout(() => {
+    if (button.isConnected) {
+      button.textContent = "Copy MD";
+    }
+  }, 1400);
+}
+
 function initRolloutControls() {
   document.querySelector("[data-rollout-collapse-level-zero]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("collapse");
@@ -4385,10 +4454,24 @@ function initRolloutControls() {
     }
     enhanceRenderedContent();
   }, true);
-  document.addEventListener("click", event => {
+  document.addEventListener("click", async event => {
     const navLink = event.target.closest('.rollout-tree a[href^="#"]');
     if (navLink && openSidebarRolloutTarget(navLink)) {
       event.preventDefault();
+      return;
+    }
+    const copyMarkdownButton = event.target.closest("[data-rollout-copy-markdown]");
+    if (copyMarkdownButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const markdown = rawMessageMarkdownStore.get(copyMarkdownButton.dataset.rolloutCopyMarkdown);
+      try {
+        await copyTextToClipboard(markdown ?? "");
+        showCopyMarkdownResult(copyMarkdownButton, "Copied");
+      } catch (error) {
+        showCopyMarkdownResult(copyMarkdownButton, "Copy failed");
+        console.warn("[codex-rollout-viewer] Could not copy Markdown", error);
+      }
       return;
     }
     const button = event.target.closest("[data-rollout-diff-mode]");

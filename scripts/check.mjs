@@ -112,7 +112,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -184,6 +184,21 @@ async function checkMarkdownRendering() {
       }
     }
   ];
+  const userMessageHtml = rendererContext.__rolloutTest.renderMessage({
+    line: 9,
+    value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# Raw user Markdown" }] } }
+  });
+  const assistantMessageHtml = rendererContext.__rolloutTest.renderMessage({
+    line: 10,
+    value: { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "**Raw assistant Markdown**" }] } }
+  });
+  const developerMessageHtml = rendererContext.__rolloutTest.renderMessage({
+    line: 11,
+    value: { type: "response_item", payload: { type: "message", role: "developer", content: [{ type: "input_text", text: "Developer instruction" }] } }
+  });
+  assert.match(userMessageHtml, /data-rollout-copy-markdown="message-9-\d+"/, "user messages must expose a raw Markdown copy button");
+  assert.match(assistantMessageHtml, /data-rollout-copy-markdown="message-10-\d+"/, "assistant messages must expose a raw Markdown copy button");
+  assert.doesNotMatch(developerMessageHtml, /data-rollout-copy-markdown/, "non-user and non-assistant messages must not expose the Markdown copy button");
   const compactSections = rendererContext.__rolloutTest.buildGroupSections({ records: compactBridgeRecords });
   assert.equal(compactSections.filter(section => section.kind === "compact").length, 1, "context compact bridge records must stay in one section");
   assert.deepEqual(
