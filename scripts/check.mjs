@@ -68,6 +68,10 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /node\.open = false;/, "restoring UI state must collapse level-two directories");
   assert.match(bootScript, /\(\?:assistant\|compact\|post-compact\|activity\)-\\d\+:body/, "legacy level-two directory state must be discarded");
   assert.match(bootScript, /workspace-slots-v1/, "workspace slot metadata must be persisted");
+  assert.doesNotMatch(bootScript, /\[normalizeWorkspaceSlot\(\{ id: DEFAULT_WORKSPACE_SLOT_ID, label: "Default" \}\)\]/, "startup must not recreate an empty Default tab");
+  assert.match(bootScript, /slot\.id === DEFAULT_WORKSPACE_SLOT_ID && slot\.label === "Default" && !slot\.sourceId/, "startup must remove previously persisted synthetic Default tabs");
+  assert.match(bootScript, /url\.searchParams\.delete\("slot"\)/, "closing the last rollout tab must clear the stale slot URL parameter");
+  assert.match(bootScript, /if \(!activeSlot\) \{[\s\S]*?workspaceSlots\.push\(slot\);[\s\S]*?setActiveWorkspaceSlotId\(slot\.id/, "opening a source from an empty workspace must create a real rollout tab on demand");
   assert.match(bootScript, /createWorkspaceSlotStorageKey\(LEGACY_CURRENT_ROLLOUT_KEY, slotId\)/, "rollout sources must be stored per workspace slot");
   assert.match(bootScript, /getSavedCurrentRolloutRenderCache\(slotId\)/, "incremental caches must be read per workspace slot");
   assert.match(bootScript, /metadata\.size > cached\.size/, "incremental parsing must only append when a rollout grows");

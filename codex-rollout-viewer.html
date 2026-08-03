@@ -4904,18 +4904,33 @@ export async function renderLocalCodexRolloutDocument() {
       return true;
     }
 
+    function clearActiveWorkspaceSlotSelection() {
+      activeWorkspaceSlotId = DEFAULT_WORKSPACE_SLOT_ID;
+      try {
+        localStorage.removeItem(ACTIVE_WORKSPACE_SLOT_KEY);
+        const url = new URL(location.href);
+        url.searchParams.delete("slot");
+        history.replaceState(history.state, "", url.href);
+      } catch {}
+    }
+
     async function initializeWorkspace() {
       const stored = await getStoredValue(WORKSPACE_SLOTS_KEY);
-      workspaceSlots = Array.isArray(stored) && stored.length
-        ? stored.map(normalizeWorkspaceSlot)
-        : [normalizeWorkspaceSlot({ id: DEFAULT_WORKSPACE_SLOT_ID, label: "Default" })];
+      workspaceSlots = (Array.isArray(stored) ? stored.map(normalizeWorkspaceSlot) : [])
+        .filter(slot => !(slot.id === DEFAULT_WORKSPACE_SLOT_ID && slot.label === "Default" && !slot.sourceId));
       const requestedId = getRequestedWorkspaceSlotId();
       const rememberedId = getLocallyActiveWorkspaceSlotId();
       activeWorkspaceSlotId = getWorkspaceSlot(requestedId)?.id
         || getWorkspaceSlot(rememberedId)?.id
-        || workspaceSlots[0].id;
+        || workspaceSlots[0]?.id
+        || DEFAULT_WORKSPACE_SLOT_ID;
       workspaceInitialized = true;
-      await setActiveWorkspaceSlotId(activeWorkspaceSlotId, { render: false });
+      if (workspaceSlots.length) {
+        await setActiveWorkspaceSlotId(activeWorkspaceSlotId, { render: false });
+      } else {
+        clearActiveWorkspaceSlotSelection();
+        await saveWorkspaceSlots({ render: false });
+      }
       startWorkspaceAutoRefresh();
     }
 
@@ -6621,7 +6636,19 @@ export async function renderLocalCodexRolloutDocument() {
       }
       const sourceId = getSourceStateId(source);
       const activeSlot = getWorkspaceSlot();
-      if (!activeSlot?.sourceId || activeSlot.sourceId === sourceId) {
+      if (!activeSlot) {
+        const slot = normalizeWorkspaceSlot({
+          id: createWorkspaceSlotId(),
+          label: source.name || "Session",
+          sourceId,
+          directoryId: source.directoryId || "",
+          directoryLabel: source.directoryLabel || ""
+        }, workspaceSlots.length);
+        workspaceSlots.push(slot);
+        await setActiveWorkspaceSlotId(slot.id, { render: false });
+        return slot.id;
+      }
+      if (!activeSlot.sourceId || activeSlot.sourceId === sourceId) {
         await updateWorkspaceSlot(activeWorkspaceSlotId, {
           label: source.name || activeSlot?.label || "Session",
           sourceId,
@@ -6706,10 +6733,7 @@ export async function renderLocalCodexRolloutDocument() {
       workspaceSlots.splice(index, 1);
       await deleteWorkspaceSlotState(id);
       if (!workspaceSlots.length) {
-        activeWorkspaceSlotId = DEFAULT_WORKSPACE_SLOT_ID;
-        try {
-          localStorage.removeItem(ACTIVE_WORKSPACE_SLOT_KEY);
-        } catch {}
+        clearActiveWorkspaceSlotSelection();
         await saveWorkspaceSlots({ render: false });
         await renderDirectorySelectionPage();
         return;
