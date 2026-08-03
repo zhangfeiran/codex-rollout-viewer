@@ -56,6 +56,7 @@ async function checkLocalHtml(fileName) {
     throw new Error(`${fileName} embedded rollout renderer is out of sync with rollout-renderer.js`);
   }
   assert.doesNotMatch(html, /Add or choose remembered sessions folders|data-folder-input|Choose folder/, "the removed home and transient folder picker must not remain in the local viewer");
+  assert.match(html, /\.standalone-workspace-tab\.is-rollout \.standalone-workspace-tab-status\s*\{[\s\S]*?background: var\(--rollout-accent, #9b7bd5\)/, "rollout status colors must support their source folder accent");
 
   const bootScript = html.slice(endIndex + end.length, html.indexOf("</script>", endIndex));
   try {
@@ -72,11 +73,24 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /metadata\.size > cached\.size/, "incremental parsing must only append when a rollout grows");
   assert.match(bootScript, /data-refresh-all-workspace-slots/, "workspace UI must expose independent bulk refresh");
   assert.match(bootScript, /data-popout-workspace-slot/, "workspace slots must support independent windows");
+  assert.match(bootScript, /data-sessions-folders-tab/, "the fixed sessions-folders tab must be rendered");
+  assert.match(bootScript, /openDirectoryTabIds = new Set\(\)/, "remembered folder tabs must start closed and be tracked at runtime");
+  assert.match(bootScript, /data-directory-tab-id/, "remembered folders must render as navigation tabs");
+  assert.match(bootScript, /data-close-directory-tab-id/, "opened folder tabs must be closeable");
+  assert.match(bootScript, /class="standalone-workspace-tab is-folder/, "folder tabs must have a distinct shape class");
+  assert.match(bootScript, /class="standalone-workspace-tab is-rollout/, "rollout tabs must have a distinct shape class");
+  assert.match(bootScript, /slot\.directoryId \? "is-folder-rollout"/, "rollout tabs from remembered folders must carry a folder color class");
+  assert.match(bootScript, /getFolderTabColor\(slot\.directoryId\)/, "rollout tabs must reuse their sessions-folder tab color");
+  assert.match(bootScript, /data-back-index/, "Back to index must live in the workspace tab row");
+  assert.match(bootScript, /label: summarizeText\(item\.title \|\| item\.name, 64\)/, "opening an indexed rollout must create a title-based tab");
+  assert.match(bootScript, /getFolderTabColor\(entry\.id\)/, "folder tabs must use stable folder colors");
+  assert.match(bootScript, /directoryId: source\.directoryId \|\| ""/, "restored rollout slots must refresh their folder identity from the source");
   assert.match(bootScript, /url\.searchParams\.set\("slot", newSlotId\)/, "each independent window must receive a newly generated slot id");
   assert.match(bootScript, /saveCurrentRollout\(rollout, newSlotId\)/, "independent windows must clone rollout state into their own storage keys");
   assert.doesNotMatch(bootScript, /function renderHome\s*\(/, "the viewer must not keep a separate home screen");
   assert.doesNotMatch(bootScript, /walkDroppedEntry|webkitGetAsEntry/, "dropped folders must not bypass the remembered sessions-folders flow");
   assert.match(bootScript, /function getSourcesFromDrop\(dataTransfer\)\s*\{\s*return getSourcesFromFiles\(dataTransfer\?\.files \|\| \[\]\);\s*\}/, "drop handling must accept JSONL files without recursively reading folders");
+  assert.match(bootScript, /activeWorkspaceViewKind !== "folders"/, "drag and drop must be limited to the sessions-folders page");
   assert.match(bootScript, /await renderDirectorySelectionPage\(\);\s*\}\)\(\);/, "startup must fall through directly to the sessions-folders page");
 }
 
