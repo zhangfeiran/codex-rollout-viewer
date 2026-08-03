@@ -68,6 +68,9 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /node\.open = false;/, "restoring UI state must collapse level-two directories");
   assert.match(bootScript, /\(\?:assistant\|compact\|post-compact\|activity\)-\\d\+:body/, "legacy level-two directory state must be discarded");
   assert.match(bootScript, /workspace-slots-v1/, "workspace slot metadata must be persisted");
+  assert.match(bootScript, /workspace-navigation-v1/, "visible tab navigation must be persisted separately from rollout slots");
+  assert.match(bootScript, /sessionStorage\.setItem\(WORKSPACE_NAVIGATION_KEY/, "visible tab navigation must be isolated per browser window while surviving reloads");
+  assert.match(bootScript, /openDirectoryTabIds: \[\.\.\.openDirectoryTabIds\]/, "open folder tabs must survive page reloads");
   assert.doesNotMatch(bootScript, /\[normalizeWorkspaceSlot\(\{ id: DEFAULT_WORKSPACE_SLOT_ID, label: "Default" \}\)\]/, "startup must not recreate an empty Default tab");
   assert.match(bootScript, /slot\.id === DEFAULT_WORKSPACE_SLOT_ID && slot\.label === "Default" && !slot\.sourceId/, "startup must remove previously persisted synthetic Default tabs");
   assert.match(bootScript, /url\.searchParams\.delete\("slot"\)/, "closing the last rollout tab must clear the stale slot URL parameter");
@@ -78,7 +81,7 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /data-refresh-all-workspace-slots/, "workspace UI must expose independent bulk refresh");
   assert.match(bootScript, /data-popout-workspace-slot/, "workspace slots must support independent windows");
   assert.match(bootScript, /data-sessions-folders-tab/, "the fixed sessions-folders tab must be rendered");
-  assert.match(bootScript, /openDirectoryTabIds = new Set\(\)/, "remembered folder tabs must start closed and be tracked at runtime");
+  assert.match(bootScript, /openDirectoryTabIds = new Set\(\)/, "remembered folder tabs must be tracked independently");
   assert.match(bootScript, /data-directory-tab-id/, "remembered folders must render as navigation tabs");
   assert.match(bootScript, /data-close-directory-tab-id/, "opened folder tabs must be closeable");
   assert.match(bootScript, /class="standalone-workspace-tab is-folder/, "folder tabs must have a distinct shape class");
@@ -93,9 +96,19 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /saveCurrentRollout\(rollout, newSlotId\)/, "independent windows must clone rollout state into their own storage keys");
   assert.doesNotMatch(bootScript, /function renderHome\s*\(/, "the viewer must not keep a separate home screen");
   assert.doesNotMatch(bootScript, /walkDroppedEntry|webkitGetAsEntry/, "dropped folders must not bypass the remembered sessions-folders flow");
-  assert.match(bootScript, /function getSourcesFromDrop\(dataTransfer\)\s*\{\s*return getSourcesFromFiles\(dataTransfer\?\.files \|\| \[\]\);\s*\}/, "drop handling must accept JSONL files without recursively reading folders");
+  assert.match(bootScript, /async function getSourcesFromDrop\(dataTransfer\)/, "drop handling must resolve persistent JSONL file handles when available");
+  assert.match(bootScript, /handle\?\.kind === "directory"[\s\S]*?continue;/, "drop handling must reject directory handles");
   assert.match(bootScript, /activeWorkspaceViewKind !== "folders"/, "drag and drop must be limited to the sessions-folders page");
-  assert.match(bootScript, /await renderDirectorySelectionPage\(\);\s*\}\)\(\);/, "startup must fall through directly to the sessions-folders page");
+  assert.match(bootScript, /await restoreInitialWorkspaceView\(\);\s*\}\)\(\);/, "startup must restore the persisted visible tab deterministically");
+  assert.match(bootScript, /activeWorkspaceViewKind === "rollout" && id === activeWorkspaceSlotId/, "rollout activation and refresh must distinguish a visible tab from a background selected slot");
+  assert.match(bootScript, /const wasVisible = activeWorkspaceViewKind === "rollout" && wasSelectedSlot/, "closing a background rollout slot must not replace the visible folder view");
+  assert.match(bootScript, /const shouldRenderActive = activeWorkspaceViewKind === "rollout"/, "background refresh must not take over folder views");
+  assert.match(bootScript, /options\.navigationVersion \?\? \+\+workspaceNavigationVersion/, "folder scans must ignore stale results after another tab navigation");
+  assert.match(bootScript, /const navigationVersion = \+\+workspaceNavigationVersion;[\s\S]*?const shouldRender = slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion/, "rollout reads must ignore stale results after another tab navigation");
+  assert.match(bootScript, /renderActiveWorkspaceView\(\{ requestPermission: true \}\)/, "clicking a persisted rollout tab must be able to restore file-system permission");
+  assert.match(bootScript, /loaded && !hadOpenDirectoryTab[\s\S]*?closeWorkspaceSlot\(rolloutSlotId\)/, "Back to index must replace the rollout tab when its folder tab was closed");
+  assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "folders"/, "the folders tab must not overwrite a rollout slot view");
+  assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "index"/, "folder index tabs must not overwrite a rollout slot view");
 }
 
 async function checkMarkdownRendering() {
