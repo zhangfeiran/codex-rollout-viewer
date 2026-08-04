@@ -2829,12 +2829,20 @@ function combineToolCallRecords(records) {
     const payload = record.value?.payload ?? {};
     const payloadType = getPayloadType(record);
     if (record.value?.type === "response_item" && isFunctionCallPayloadType(payloadType) && payload.call_id) {
+      const callInput = payload.input ?? payload.arguments ?? "";
+      const directApplyPatch = isToolName(payload.name, "apply_patch");
+      const applyPatchTexts = extractApplyPatchTexts(callInput, directApplyPatch);
+      const applyPatchEventCount = directApplyPatch
+        ? 1
+        : parseExecToolNames(callInput).filter(name => name === "apply_patch").length;
       const groupedRecord = {
         ...record,
         toolGroup: {
           callRecord: record,
           outputRecord: null,
-          eventRecords: []
+          eventRecords: [],
+          applyPatchTexts,
+          applyPatchEventCount: Math.max(applyPatchTexts.length, applyPatchEventCount)
         }
       };
       groupByCallId.set(payload.call_id, groupedRecord.toolGroup);
@@ -2855,12 +2863,12 @@ function combineToolCallRecords(records) {
       continue;
     }
     if (record.value?.type === "event_msg" && payloadType === "patch_apply_end") {
-      const group = [...pendingGroups].reverse().find(candidate => {
-        const callPayload = candidate.callRecord.value?.payload ?? {};
-        return isToolName(callPayload.name, "exec") && String(callPayload.input ?? callPayload.arguments ?? "").includes("apply_patch");
-      });
+      const group = [...pendingGroups].reverse().find(candidate =>
+        candidate.applyPatchEventCount > candidate.eventRecords.length
+      );
       if (group) {
-        group.eventRecords.push(record);
+        const patchText = group.applyPatchTexts[group.eventRecords.length] || "";
+        group.eventRecords.push(recoverPatchEventAddedFileDiffs(record, patchText));
         consumedRecords.add(record);
       }
     }
@@ -3096,6 +3104,28 @@ function decodeJsStringLiteral(literal) {
   })[escaped] ?? match);
 }
 
+function readJsStringLiteral(source, start) {
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'" && quote !== "`") {
+    return null;
+  }
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === quote) {
+      return {
+        value: decodeJsStringLiteral(source.slice(start, index + 1)),
+        end: index + 1
+      };
+    }
+  }
+  return null;
+}
+
 function readJsStringProperty(objectText, propertyName) {
   const escapedName = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const propertyPattern = new RegExp(`(?:^|[,{\\n])\\s*(?:["']${escapedName}["']|${escapedName})\\s*:\\s*`, "g");
@@ -3105,21 +3135,121 @@ function readJsStringProperty(objectText, propertyName) {
   }
   const start = match.index + match[0].length;
   const quote = objectText[start];
-  if (quote !== '"' && quote !== "'" && quote !== "`") {
-    return "";
+  return readJsStringLiteral(objectText, start)?.value || "";
+}
+
+function extractApplyPatchTexts(input, directApplyPatch = false) {
+  const source = String(input ?? "");
+  if (directApplyPatch) {
+    return source.trim() ? [source] : [];
   }
-  let escaped = false;
-  for (let index = start + 1; index < objectText.length; index += 1) {
-    const character = objectText[index];
-    if (escaped) {
-      escaped = false;
-    } else if (character === "\\") {
-      escaped = true;
-    } else if (character === quote) {
-      return decodeJsStringLiteral(objectText.slice(start, index + 1));
+  const stringVariables = new Map();
+  const assignmentPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*/g;
+  let match = null;
+  while ((match = assignmentPattern.exec(source))) {
+    const literal = readJsStringLiteral(source, assignmentPattern.lastIndex);
+    if (literal) {
+      stringVariables.set(match[1], literal.value);
+      assignmentPattern.lastIndex = literal.end;
+    }
+  }
+  const patches = [];
+  const invocationPattern = /tools\.apply_patch\s*\(\s*/g;
+  while ((match = invocationPattern.exec(source))) {
+    const argumentStart = invocationPattern.lastIndex;
+    const literal = readJsStringLiteral(source, argumentStart);
+    if (literal) {
+      patches.push(literal.value);
+      invocationPattern.lastIndex = literal.end;
+      continue;
+    }
+    const identifier = source.slice(argumentStart).match(/^([A-Za-z_$][\w$]*)/);
+    const patch = identifier ? stringVariables.get(identifier[1]) : "";
+    if (patch) {
+      patches.push(patch);
+    }
+  }
+  return patches;
+}
+
+function parseApplyPatchAddedFiles(patchText) {
+  const files = new Map();
+  const lines = String(patchText ?? "").replace(/\r\n?/g, "\n").split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\*\*\* Add File:\s*(.+?)\s*$/);
+    if (!match) {
+      continue;
+    }
+    const addedLines = [];
+    for (index += 1; index < lines.length && !lines[index].startsWith("*** "); index += 1) {
+      if (lines[index].startsWith("+")) {
+        addedLines.push(lines[index]);
+      }
+    }
+    index -= 1;
+    if (addedLines.length) {
+      files.set(match[1], `@@ -0,0 +1,${addedLines.length} @@\n${addedLines.join("\n")}\n`);
+    }
+  }
+  return files;
+}
+
+function normalizePatchPath(path) {
+  return String(path ?? "").replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function findAddedFileDiff(addedFiles, eventPath) {
+  const normalizedEventPath = normalizePatchPath(eventPath);
+  for (const [patchPath, diff] of addedFiles) {
+    const normalizedPatchPath = normalizePatchPath(patchPath);
+    if (normalizedPatchPath === normalizedEventPath
+      || normalizedEventPath.endsWith(`/${normalizedPatchPath}`)
+      || normalizedPatchPath.endsWith(`/${normalizedEventPath}`)) {
+      return diff;
     }
   }
   return "";
+}
+
+function recoverMissingAddedFileDiffs(changes, patchText) {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    return changes;
+  }
+  const addedFiles = parseApplyPatchAddedFiles(patchText);
+  if (!addedFiles.size) {
+    return changes;
+  }
+  let recovered = false;
+  const nextChanges = Object.fromEntries(Object.entries(changes).map(([path, change]) => {
+    if (change?.type !== "add" || String(change?.unified_diff || "")) {
+      return [path, change];
+    }
+    const unifiedDiff = findAddedFileDiff(addedFiles, path);
+    if (!unifiedDiff) {
+      return [path, change];
+    }
+    recovered = true;
+    return [path, { ...change, unified_diff: unifiedDiff }];
+  }));
+  return recovered ? nextChanges : changes;
+}
+
+function recoverPatchEventAddedFileDiffs(record, patchText) {
+  const payload = record.value?.payload ?? {};
+  const changes = recoverMissingAddedFileDiffs(payload.changes, patchText);
+  if (changes === payload.changes) {
+    return record;
+  }
+  return {
+    ...record,
+    value: {
+      ...record.value,
+      payload: {
+        ...payload,
+        changes
+      }
+    }
+  };
 }
 
 function parseExecCommandCalls(input) {

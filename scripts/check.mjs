@@ -271,6 +271,49 @@ async function checkMarkdownRendering() {
     [["src/old.js", "src/new.js", 1, 1], ["src/added.js", null, 2, 0]],
     "patch_apply_end unified diffs must preserve paths, moves, and line stats"
   );
+  const missingAddPatchText = [
+    "*** Begin Patch",
+    "*** Add File: src/new-plan.md",
+    "+# Plan",
+    "+",
+    "+Details",
+    "*** End Patch"
+  ].join("\n");
+  const missingAddRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    {
+      line: 12,
+      value: {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          call_id: "call-add-file",
+          input: `const patch = ${JSON.stringify(missingAddPatchText)};\ntext(await tools.apply_patch(patch));`
+        }
+      }
+    },
+    {
+      line: 13,
+      value: {
+        type: "event_msg",
+        payload: {
+          type: "patch_apply_end",
+          changes: {
+            "/repo/src/new-plan.md": { type: "add", unified_diff: "", move_path: null },
+            "/repo/src/existing.js": { type: "update", unified_diff: "@@ -1 +1 @@\n-old\n+new\n", move_path: null }
+          }
+        }
+      }
+    }
+  ]);
+  const recoveredAddChanges = missingAddRecords[0].toolGroup.eventRecords[0].value.payload.changes;
+  assert.match(recoveredAddChanges["/repo/src/new-plan.md"].unified_diff, /^@@ -0,0 \+1,3 @@\n\+# Plan\n\+\n\+Details\n$/);
+  assert.equal(recoveredAddChanges["/repo/src/existing.js"].unified_diff, "@@ -1 +1 @@\n-old\n+new\n", "existing event diffs must remain authoritative");
+  assert.deepEqual(
+    Array.from(rendererContext.__rolloutTest.getRecordsPatchFiles(missingAddRecords), file => [file.path, file.additions, file.deletions]),
+    [["/repo/src/new-plan.md", 3, 0], ["/repo/src/existing.js", 1, 1]],
+    "empty Add File event diffs must recover from the matching apply_patch input"
+  );
   const wordDiffPair = rendererContext.__rolloutTest.renderWordDiffPair("count = 2", "count = 8");
   assert.equal(wordDiffPair.deletedHtml, 'count = <span class="rollout-diff-word-delete">2</span>', "word diff must highlight only the replaced deletion token");
   assert.equal(wordDiffPair.addedHtml, 'count = <span class="rollout-diff-word-add">8</span>', "word diff must highlight only the replaced addition token");
