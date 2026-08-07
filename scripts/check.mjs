@@ -109,6 +109,8 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /loaded && !hadOpenDirectoryTab[\s\S]*?closeWorkspaceSlot\(rolloutSlotId\)/, "Back to index must replace the rollout tab when its folder tab was closed");
   assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "folders"/, "the folders tab must not overwrite a rollout slot view");
   assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "index"/, "folder index tabs must not overwrite a rollout slot view");
+  assert.match(bootScript, /diff\.closest\("\[data-rollout-diff-scope\]"\) \|\| diff/, "restored diff modes must update controls outside the diff body");
+  assert.match(bootScript, /button\.closest\("\[data-rollout-diff-scope\]"\)\?\.querySelector\("\[data-rollout-diff\]\[data-rollout-state-key\]"\)/, "diff mode clicks must persist through their enclosing scope");
 }
 
 async function checkMarkdownRendering() {
@@ -119,6 +121,7 @@ async function checkMarkdownRendering() {
   assert.match(rendererSource, /data-rollout-collapse-level-zero>Collapse L0<\/button>[\s\S]*data-rollout-collapse-level-one>Collapse L1<\/button>[\s\S]*data-rollout-expand-level-one>Expand L1<\/button>/, "directory controls must use explicit collapse and expand labels");
   assert.match(rendererSource, /\.rollout-diff-word-add\s*\{[\s\S]*background: rgba\(63, 185, 80, 0\.42\)/, "word additions must use a stronger green highlight");
   assert.match(rendererSource, /\.rollout-diff-word-delete\s*\{[\s\S]*background: rgba\(255, 107, 107, 0\.42\)/, "word deletions must use a stronger red highlight");
+  assert.match(rendererSource, /\.rollout-diff-prefix\s*\{[\s\S]*?user-select: none;/, "visible diff prefixes must stay outside manual text selection");
   assert.match(rendererSource, /\.rollout-exec-command-head > span:last-child\s*\{/, "patch stat colors must not be overridden by the tool-header secondary text rule");
   assert.match(rendererSource, /\.rollout-diff-file > summary\s*\{[\s\S]*?justify-content: flex-start;/, "patch file rows must stay left aligned");
   assert.match(rendererSource, /\.rollout-patch-file-title\s*\{[\s\S]*?font-weight: 750;/, "Patch diff file titles must be bold");
@@ -129,7 +132,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -271,6 +274,26 @@ async function checkMarkdownRendering() {
     [["src/old.js", "src/new.js", 1, 1], ["src/added.js", null, 2, 0]],
     "patch_apply_end unified diffs must preserve paths, moves, and line stats"
   );
+  assert.equal(
+    rendererContext.__rolloutTest.getGitDiffText(parsedPatchFiles),
+    [
+      "diff --git a/src/old.js b/src/new.js",
+      "--- a/src/old.js",
+      "+++ b/src/new.js",
+      "@@ -1 +1 @@",
+      "-old value",
+      "+new value",
+      "",
+      "diff --git a/src/added.js b/src/added.js",
+      "--- /dev/null",
+      "+++ b/src/added.js",
+      "@@ -0,0 +1,2 @@",
+      "+first",
+      "+second",
+      ""
+    ].join("\n"),
+    "copied patches must use complete Git diff headers and preserve line prefixes"
+  );
   const missingAddPatchText = [
     "*** Begin Patch",
     "*** Add File: src/new-plan.md",
@@ -333,9 +356,11 @@ async function checkMarkdownRendering() {
   assert.equal((patchEndHtml.match(/<details class="rollout-diff-file"/g) || []).length, 2, "multi-file patches must render one flat details entry per file");
   assert.match(
     patchEndHtml,
-    /rollout-exec-command-head">[\s\S]*apply_patch[\s\S]*>Unified<[\s\S]*>Split<[\s\S]*<\/div>\s*<div class="rollout-diff/,
+    /rollout-exec-command-head">[\s\S]*apply_patch[\s\S]*>Copy diff<[\s\S]*>Unified<[\s\S]*>Split<[\s\S]*<\/div>\s*<div class="rollout-diff/,
     "diff mode controls must share the gray apply_patch header line"
   );
+  assert.match(patchEndHtml, /data-rollout-diff-scope[\s\S]*data-rollout-copy-diff=/, "patch diff actions must target their own diff scope");
+  assert.equal((patchEndHtml.match(/rollout-copy-file-diff/g) || []).length, 2, "each patch file must expose its own copy button");
   assert.doesNotMatch(patchEndHtml, /rollout-patch-details|files changed|Patch diff, 2 files/, "patches must not render an aggregate folding layer or duplicate totals");
   const singlePatchHtml = rendererContext.__rolloutTest.renderEvent({
     line: 22,
@@ -343,9 +368,10 @@ async function checkMarkdownRendering() {
   });
   assert.match(
     singlePatchHtml,
-    /rollout-patch-file-label"><span class="rollout-patch-file-title">Patch diff<\/span><span class="rollout-diff-path">src\/old\.js -&gt; src\/new\.js<\/span><span class="rollout-diff-file-stat">[\s\S]*rollout-patch-additions">\+1<[\s\S]*rollout-patch-deletions">-1<[\s\S]*<\/span><\/span>\s*<\/summary>/,
-    "single-file patch summaries must show the path and colored stats directly"
+    /rollout-patch-file-label"><span class="rollout-patch-file-title">Patch diff<\/span><span class="rollout-diff-path">src\/old\.js -&gt; src\/new\.js<\/span><span class="rollout-diff-file-stat">[\s\S]*rollout-patch-additions">\+1<[\s\S]*rollout-patch-deletions">-1<[\s\S]*<\/span><\/span>\s*<button class="rollout-copy-diff rollout-copy-file-diff"[^>]*>Copy diff<\/button>\s*<\/summary>/,
+    "single-file patch summaries must show the path, stats, and file copy action directly"
   );
+  assert.equal((singlePatchHtml.match(/data-rollout-copy-diff=/g) || []).length, 2, "single-file patches must keep separate whole-patch and file copy actions");
   assert.equal((singlePatchHtml.match(/<details class="rollout-diff-file"/g) || []).length, 1, "single-file patches must use the same one-details-per-file layout");
   assert.doesNotMatch(singlePatchHtml, /rollout-patch-details/, "single-file patches must not create an aggregate details layer");
 
@@ -383,7 +409,11 @@ async function checkMarkdownRendering() {
   assert.doesNotMatch(finalHtml, /rollout-assistant-section|data-rollout-level="2"/, "final sections must not use the nested assistant-section structure");
   assert.doesNotMatch(finalHtml, /Working update|Steered update/, "final sections must not include commentary messages");
   assert.equal((finalHtml.match(/<details class="rollout-diff-file"/g) || []).length, 2, "final summaries must render one aggregate diff entry per changed file");
+  assert.equal((finalHtml.match(/rollout-copy-file-diff/g) || []).length, 2, "final summaries must expose a copy action for every changed file");
   assert.equal((finalHtml.match(/src\/old\.js/g) || []).length, 1, "a repeatedly edited file must appear only once in the aggregate diff");
+  assert.match(finalHtml, /class="rollout-final-changes" data-rollout-diff-scope>[\s\S]*data-rollout-copy-diff=[\s\S]*data-rollout-diff-mode="split"/, "final changed files must expose scoped copy and split controls");
+  const repeatedGitDiff = rendererContext.__rolloutTest.getGitDiffText(repeatedPatchFiles);
+  assert.match(repeatedGitDiff, /@@ -1 \+1 @@\n-old value\n\+new value\n@@ -2 \+2 @@\n-before\n\+after/, "copied final diffs must include every merged patch for a file");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
   assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-45"/, "the final section must follow its user turn as a sibling");
   assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-45">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");

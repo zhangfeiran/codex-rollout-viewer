@@ -1053,7 +1053,8 @@ body.codex-rollout-page {
   min-width: 0;
 }
 
-.rollout-copy-markdown {
+.rollout-copy-markdown,
+.rollout-copy-diff {
   justify-self: start;
   min-height: 22px;
   padding: 2px 7px;
@@ -1068,7 +1069,9 @@ body.codex-rollout-page {
 }
 
 .rollout-copy-markdown:hover,
-.rollout-copy-markdown:focus-visible {
+.rollout-copy-markdown:focus-visible,
+.rollout-copy-diff:hover,
+.rollout-copy-diff:focus-visible {
   color: var(--wh-rollout-fg);
   background: var(--wh-rollout-panel-strong);
 }
@@ -1462,8 +1465,19 @@ pre + .rollout-kv,
 }
 
 .rollout-patch-file-label .rollout-diff-file-stat,
-.rollout-exec-command-head .rollout-diff-mode {
+.rollout-exec-command-head .rollout-diff-actions {
   flex: 0 0 auto;
+}
+
+.rollout-diff-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rollout-copy-file-diff {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .rollout-diff-mode {
@@ -2421,9 +2435,33 @@ function parsePatchApplyEndChanges(changes) {
       path,
       moveTo: change?.move_path || null,
       changeType: change?.type || "update",
+      unifiedDiff: String(change?.unified_diff ?? ""),
       ...parsed
     };
   });
+}
+
+function normalizeGitDiffPath(path) {
+  return String(path ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function getGitDiffText(files) {
+  return files.map(file => {
+    const oldPath = normalizeGitDiffPath(file.path);
+    const newPath = normalizeGitDiffPath(file.moveTo || file.path);
+    const rawDiff = String(file.unifiedDiff ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    if (/^diff --git /m.test(rawDiff)) {
+      return rawDiff;
+    }
+    const oldMarker = file.changeType === "add" ? "/dev/null" : `a/${oldPath}`;
+    const newMarker = file.changeType === "delete" ? "/dev/null" : `b/${newPath}`;
+    const headers = [
+      `diff --git a/${oldPath} b/${newPath}`,
+      `--- ${oldMarker}`,
+      `+++ ${newMarker}`
+    ];
+    return [...headers, rawDiff].filter(Boolean).join("\n");
+  }).join("\n\n").replace(/\n*$/, "\n");
 }
 
 function getPatchStats(files) {
@@ -2638,10 +2676,12 @@ function renderPatchLineStats(additions, deletions) {
 
 function renderPatchFileShell(file) {
   const lazyKey = storeLazyRolloutContent(file.lines);
+  const copyKey = storeLazyRolloutContent(getGitDiffText([file]));
   return `
     <details class="rollout-diff-file" data-rollout-lazy-diff-file data-rollout-lazy-key="${escapeAttribute(lazyKey)}">
       <summary>
         <span class="rollout-patch-file-label"><span class="rollout-patch-file-title">Patch diff</span><span class="rollout-diff-path">${escapeHtml(file.moveTo ? `${file.path} -> ${file.moveTo}` : file.path)}</span><span class="rollout-diff-file-stat">${renderPatchLineStats(file.additions, file.deletions)}</span></span>
+        <button class="rollout-copy-diff rollout-copy-file-diff" type="button" data-rollout-copy-diff="${escapeAttribute(copyKey)}" title="Copy this file as a Git patch">Copy diff</button>
       </summary>
       <div class="rollout-diff-body" data-rollout-diff-file-body></div>
     </details>
@@ -3604,6 +3644,10 @@ function getRecordsPatchFiles(records) {
           existing.additions += file.additions;
           existing.deletions += file.deletions;
           existing.changeType = file.changeType === "delete" ? "delete" : existing.changeType;
+          existing.unifiedDiff = [existing.unifiedDiff, file.unifiedDiff]
+            .map(diff => String(diff ?? "").replace(/\n+$/, ""))
+            .filter(Boolean)
+            .join("\n");
         } else {
           filesByPath.set(key, {
             ...file,
@@ -3916,16 +3960,24 @@ function renderDiffModeControls() {
   </span>`;
 }
 
+function renderDiffActions(files) {
+  const copyKey = storeLazyRolloutContent(getGitDiffText(files));
+  return `<span class="rollout-diff-actions">
+    <button class="rollout-copy-diff" type="button" data-rollout-copy-diff="${escapeAttribute(copyKey)}" title="Copy as a Git patch">Copy diff</button>
+    ${renderDiffModeControls()}
+  </span>`;
+}
+
 function renderAttachedPatchEvent(patchRecord, options = {}) {
   const payload = patchRecord.value?.payload ?? {};
   const files = parsePatchApplyEndChanges(payload.changes);
   const stats = getPatchStats(files);
   const idAttribute = options.standalone ? ` id="record-${escapeAttribute(patchRecord.line)}"` : "";
   return `
-    <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""} ${options.standalone ? "rollout-entry-anchor" : ""}"${idAttribute}>
+    <section class="rollout-exec-command ${payload.success === false ? "is-error" : ""} ${options.standalone ? "rollout-entry-anchor" : ""}" data-rollout-diff-scope${idAttribute}>
       <div class="rollout-exec-command-head">
         <span class="rollout-patch-tool-summary"><span>apply_patch</span>${renderPatchLineStats(stats.additions, stats.deletions)}${payload.success === false ? "<span>failed</span>" : ""}</span>
-        ${renderDiffModeControls()}
+        ${renderDiffActions(files)}
       </div>
       ${renderPatchFiles(files, patchRecord)}
       ${payload.stderr ? renderLazyCodeDetails("stderr", payload.stderr, "text", `record-${patchRecord.line}:stderr`) : ""}
@@ -4262,10 +4314,10 @@ function renderFinalAnswerSection(section, context) {
       <div class="rollout-turn-body">
         ${renderRecord(finalRecord, context)}
         ${section.patchFiles.length ? `
-          <section class="rollout-final-changes">
+          <section class="rollout-final-changes" data-rollout-diff-scope>
             <div class="rollout-exec-command-head">
               <span class="rollout-patch-tool-summary"><span>Changed files</span>${renderPatchLineStats(stats.additions, stats.deletions)}</span>
-              ${renderDiffModeControls()}
+              ${renderDiffActions(section.patchFiles)}
             </div>
             ${renderPatchFiles(section.patchFiles, patchRecord)}
           </section>
@@ -4545,7 +4597,7 @@ function showCopyMarkdownResult(button, label) {
   button.textContent = label;
   button._rolloutCopyResetTimer = setTimeout(() => {
     if (button.isConnected) {
-      button.textContent = "Copy MD";
+      button.textContent = button.matches("[data-rollout-copy-diff]") ? "Copy diff" : "Copy MD";
     }
   }, 1400);
 }
@@ -4604,13 +4656,27 @@ function initRolloutControls() {
       }
       return;
     }
+    const copyDiffButton = event.target.closest("[data-rollout-copy-diff]");
+    if (copyDiffButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const diffText = lazyRolloutContentStore.get(copyDiffButton.dataset.rolloutCopyDiff);
+      try {
+        await copyTextToClipboard(diffText ?? "");
+        showCopyMarkdownResult(copyDiffButton, "Copied");
+      } catch (error) {
+        showCopyMarkdownResult(copyDiffButton, "Copy failed");
+        console.warn("[codex-rollout-viewer] Could not copy diff", error);
+      }
+      return;
+    }
     const button = event.target.closest("[data-rollout-diff-mode]");
     if (!button) {
       return;
     }
     const mode = button.dataset.rolloutDiffMode;
     const diff = button.closest("[data-rollout-diff]")
-      || button.closest(".rollout-exec-command")?.querySelector("[data-rollout-diff]");
+      || button.closest("[data-rollout-diff-scope]")?.querySelector("[data-rollout-diff]");
     if (!mode || !diff) {
       return;
     }
@@ -4618,7 +4684,8 @@ function initRolloutControls() {
     event.stopPropagation();
     diff.classList.toggle("is-unified", mode === "unified");
     diff.classList.toggle("is-split", mode === "split");
-    diff.querySelectorAll("[data-rollout-diff-mode]").forEach(item => {
+    const controls = button.closest("[data-rollout-diff-scope]") || diff;
+    controls.querySelectorAll("[data-rollout-diff-mode]").forEach(item => {
       item.setAttribute("aria-pressed", String(item === button));
       });
   });
@@ -6680,7 +6747,8 @@ export async function renderLocalCodexRolloutDocument() {
       const normalized = mode === "split" ? "split" : "unified";
       diff.classList.toggle("is-unified", normalized === "unified");
       diff.classList.toggle("is-split", normalized === "split");
-      diff.querySelectorAll("[data-rollout-diff-mode]").forEach(button => {
+      const controls = diff.closest("[data-rollout-diff-scope]") || diff;
+      controls.querySelectorAll("[data-rollout-diff-mode]").forEach(button => {
         button.setAttribute("aria-pressed", String(button.dataset.rolloutDiffMode === normalized));
       });
     }
@@ -6816,7 +6884,8 @@ export async function renderLocalCodexRolloutDocument() {
         if (!button) {
           return;
         }
-        const diff = button.closest("[data-rollout-diff][data-rollout-state-key]");
+        const diff = button.closest("[data-rollout-diff][data-rollout-state-key]")
+          || button.closest("[data-rollout-diff-scope]")?.querySelector("[data-rollout-diff][data-rollout-state-key]");
         if (!diff || diff.closest(".rollout-sidebar")) {
           return;
         }
