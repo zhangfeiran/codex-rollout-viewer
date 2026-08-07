@@ -127,12 +127,15 @@ async function checkMarkdownRendering() {
   assert.match(rendererSource, /\.rollout-patch-file-title\s*\{[\s\S]*?font-weight: 750;/, "Patch diff file titles must be bold");
   assert.match(rendererSource, /\.rollout-final-answer-turn\s*\{[\s\S]*?width: calc\(100% - 28px\);[\s\S]*?margin-left: 28px;/, "final-answer turns must be narrower and indented on desktop");
   assert.match(rendererSource, /@media \(max-width: 640px\)[\s\S]*?\.rollout-final-answer-turn\s*\{[\s\S]*?width: calc\(100% - 12px\);[\s\S]*?margin-left: 12px;/, "final-answer turns must keep a smaller mobile indent");
+  assert.match(rendererSource, /\.rollout-steer-turn\s*\{[\s\S]*?width: calc\(100% - 28px\);[\s\S]*?margin-left: 28px;/, "steer turns must be narrower and indented on desktop");
+  assert.match(rendererSource, /@media \(max-width: 640px\)[\s\S]*?\.rollout-steer-turn\s*\{[\s\S]*?width: calc\(100% - 12px\);[\s\S]*?margin-left: 12px;/, "steer turns must keep a smaller mobile indent");
+  assert.match(rendererSource, /\.rollout-tree > details\.rollout-steer-nav\s*\{[\s\S]*?margin-left: 14px;/, "steer turns must also be indented in the outline");
   const runnableRenderer = rendererSource
     .replace(/^export\s+/gm, "")
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -377,12 +380,21 @@ async function checkMarkdownRendering() {
 
   const completedTurnRecords = rendererContext.__rolloutTest.createRenderableRecords([
     { line: 40, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Original request" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } },
-    { line: 41, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } },
-    { line: 42, value: { type: "event_msg", payload: { type: "patch_apply_end", turn_id: "turn-original", success: true, changes: { "src/old.js": patchChanges["src/old.js"] } } } },
-    { line: 43, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Steer while working" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
-    { line: 44, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Steered update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
-    { line: 45, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "\nFinished result\n\nMore details" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } }
+    { line: 41, value: { type: "event_msg", payload: { type: "task_started", turn_id: "turn-original" } } },
+    { line: 42, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } },
+    { line: 43, value: { type: "event_msg", payload: { type: "patch_apply_end", turn_id: "turn-original", success: true, changes: { "src/old.js": patchChanges["src/old.js"] } } } },
+    { line: 44, value: { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-original" } } },
+    { line: 45, value: { type: "event_msg", payload: { type: "task_started", turn_id: "turn-steer" } } },
+    { line: 46, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Steer while working" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
+    { line: 47, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Steered update" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" } } } },
+    { line: 48, value: { type: "event_msg", payload: { type: "patch_apply_end", turn_id: "turn-steer", success: true, changes: { "src/steer.js": patchChanges["src/added.js"] } } } },
+    { line: 49, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "\nFinished result\n\nMore details" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-original" } } } }
   ]);
+  const repeatedTextRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 30, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }], internal_chat_message_metadata_passthrough: { turn_id: "repeat-a" } } } },
+    { line: 31, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }], internal_chat_message_metadata_passthrough: { turn_id: "repeat-b" } } } }
+  ]);
+  assert.equal(repeatedTextRecords.length, 2, "identical user text from different turns must not be deduplicated before steer detection");
   const completedGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords);
   const originalSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[0]);
   const steerSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[1]);
@@ -390,10 +402,39 @@ async function checkMarkdownRendering() {
   assert.ok(finalSection, "a user turn with a matching final_answer must receive a final section");
   assert.equal(finalSection.title, "Finished result More details", "the final section title must collapse the full final-answer body into one line");
   assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(completedGroups[1]), null, "a steer turn without final_answer must not receive a final section");
+  assert.equal(completedGroups[0].isSteer, false, "the active user turn must remain a normal turn");
+  assert.equal(completedGroups[1].isSteer, true, "a user turn arriving before the previous final_answer must be marked as steer even after task_complete");
+  assert.equal(completedGroups[1].steerParent, completedGroups[0], "steer turns must retain their interrupted parent turn");
+  assert.deepEqual(Array.from(finalSection.patchFiles, file => file.path), ["src/old.js", "src/steer.js"], "final summaries must include changed files from both sides of a steer boundary");
+  const steerOwnedTurnRecords = completedTurnRecords.map(record => record.line !== 49 ? record : {
+    ...record,
+    value: {
+      ...record.value,
+      payload: {
+        ...record.value.payload,
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-steer" }
+      }
+    }
+  });
+  const steerOwnedGroups = rendererContext.__rolloutTest.buildGroups(steerOwnedTurnRecords);
+  const steerOwnedFinal = rendererContext.__rolloutTest.buildGroupFinalAnswer(steerOwnedGroups[1]);
+  assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(steerOwnedGroups[0]), null, "a final_answer owned by a steer must not be duplicated under its parent turn");
+  assert.deepEqual(Array.from(steerOwnedFinal.patchFiles, file => file.path), ["src/old.js", "src/steer.js"], "steer-owned final summaries must include pre-steer changes in JSONL order");
   assert.equal(originalSections.some(section => section.kind === "final"), false, "final_answer must not be nested inside the user turn sections");
-  assert.deepEqual(Array.from(finalSection.records, record => record.line), [45], "the final section must contain only final_answer records");
+  assert.deepEqual(Array.from(finalSection.records, record => record.line), [49], "the final section must contain only final_answer records");
   assert.equal(originalSections.some(section => section.records.includes(finalSection.records[0])), false, "final_answer must be removed from commentary sections");
   assert.equal(steerSections.some(section => section.records.includes(finalSection.records[0])), false, "a final_answer from an earlier turn must not render inside the steer turn");
+  const steerHtml = rendererContext.__rolloutTest.renderTurnGroup(completedGroups[1], { callById: new Map() });
+  assert.match(steerHtml, /class="rollout-turn rollout-steer-turn"[\s\S]*rollout-turn-meta">\s*<span>steer<\/span>/, "steer turns must render with the indented class and visible metadata");
+  assert.match(rendererContext.__rolloutTest.renderSidebarGroup(completedGroups[1], new Map()), /class="rollout-steer-nav"/, "steer turns must be identifiable in the outline");
+  const steerLifecycle = rendererContext.__rolloutTest.getSteerParentTurnIds([
+    { value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "A" }], internal_chat_message_metadata_passthrough: { turn_id: "a" } } } },
+    { value: { type: "event_msg", payload: { type: "task_complete", turn_id: "a" } } },
+    { value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "B" }], internal_chat_message_metadata_passthrough: { turn_id: "b" } } } },
+    { value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Done" }], internal_chat_message_metadata_passthrough: { turn_id: "b" } } } },
+    { value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "C" }], internal_chat_message_metadata_passthrough: { turn_id: "c" } } } }
+  ]);
+  assert.equal(JSON.stringify(Array.from(steerLifecycle)), JSON.stringify([["b", "a"]]), "task_complete must not end steer detection, while final_answer must end it");
   const repeatedPatchFiles = rendererContext.__rolloutTest.getRecordsPatchFiles([
     { line: 46, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": patchChanges["src/old.js"] } } } },
     { line: 47, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": { ...patchChanges["src/old.js"], unified_diff: "@@ -2 +2 @@\n-before\n+after\n" }, "src/added.js": patchChanges["src/added.js"] } } } }
@@ -415,8 +456,8 @@ async function checkMarkdownRendering() {
   const repeatedGitDiff = rendererContext.__rolloutTest.getGitDiffText(repeatedPatchFiles);
   assert.match(repeatedGitDiff, /@@ -1 \+1 @@\n-old value\n\+new value\n@@ -2 \+2 @@\n-before\n\+after/, "copied final diffs must include every merged patch for a file");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
-  assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-45"/, "the final section must follow its user turn as a sibling");
-  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-45">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");
+  assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-49"/, "the final section must follow its user turn as a sibling");
+  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-49">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");
 
   const execInput = [
     "const results = await Promise.all([",

@@ -763,6 +763,10 @@ body.codex-rollout-page {
   margin-left: 8px;
 }
 
+.rollout-tree > details.rollout-steer-nav {
+  margin-left: 14px;
+}
+
 .rollout-tree a:hover {
   color: var(--wh-rollout-fg);
   background: var(--wh-rollout-panel-strong);
@@ -903,6 +907,28 @@ body.codex-rollout-page {
 
 .rollout-turn-body {
   min-width: 0;
+}
+
+.rollout-steer-turn {
+  width: calc(100% - 28px);
+  margin-left: 28px;
+  box-sizing: border-box;
+  border-color: rgba(88, 166, 255, 0.3);
+  border-radius: 6px;
+  background: rgba(88, 166, 255, 0.025);
+}
+
+.rollout-steer-turn > summary {
+  padding: 6px 9px;
+  background: rgba(88, 166, 255, 0.07);
+}
+
+.rollout-steer-turn .rollout-turn-title h2 {
+  font-size: 13px;
+}
+
+.rollout-steer-turn .rollout-turn-meta {
+  font-size: 10px;
 }
 
 .rollout-assistant-section {
@@ -1741,6 +1767,11 @@ pre + .rollout-kv,
   }
 
   .rollout-final-answer-turn {
+    width: calc(100% - 12px);
+    margin-left: 12px;
+  }
+
+  .rollout-steer-turn {
     width: calc(100% - 12px);
     margin-left: 12px;
   }
@@ -2834,7 +2865,7 @@ function getMessageDedupKey(record) {
   if (!text) {
     return null;
   }
-  return `${getCanonicalMessageRole(record)}\u0000${text}`;
+  return `${getCanonicalMessageRole(record)}\u0000${getTurnId(record) || ""}\u0000${text}`;
 }
 
 function getRecordPriority(record) {
@@ -3510,7 +3541,35 @@ function normalizeDuplicateUserText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function getSteerParentTurnIds(records) {
+  const parentByTurnId = new Map();
+  const finalizedTurnIds = new Set();
+  let previousUserTurnId = null;
+  for (const record of records) {
+    if (isFinalAnswerRecord(record)) {
+      const finalTurnId = getTurnId(record);
+      if (finalTurnId) {
+        finalizedTurnIds.add(finalTurnId);
+      }
+      continue;
+    }
+    if (!isUserMessageRecord(record)) {
+      continue;
+    }
+    const turnId = getTurnId(record);
+    if (!turnId || turnId === previousUserTurnId) {
+      continue;
+    }
+    if (previousUserTurnId && !finalizedTurnIds.has(previousUserTurnId)) {
+      parentByTurnId.set(turnId, previousUserTurnId);
+    }
+    previousUserTurnId = turnId;
+  }
+  return parentByTurnId;
+}
+
 function buildGroups(records) {
+  const steerParentTurnIds = getSteerParentTurnIds(records);
   const groups = [];
   let current = {
     id: "preamble",
@@ -3557,6 +3616,9 @@ function buildGroups(records) {
   const groupByTurnId = new Map();
   for (const group of groups) {
     group.summaryRecords = [...group.records];
+    group.isSteer = false;
+    group.steerParent = null;
+    group.steerChildren = [];
     const userRecord = group.records.find(isUserMessageRecord);
     const turnId = getTurnId(userRecord);
     if (turnId) {
@@ -3571,7 +3633,39 @@ function buildGroups(records) {
       }
     }
   }
+  for (const [steerTurnId, parentTurnId] of steerParentTurnIds) {
+    const steerGroup = groupByTurnId.get(steerTurnId);
+    const parentGroup = groupByTurnId.get(parentTurnId);
+    if (!steerGroup || !parentGroup || steerGroup === parentGroup) {
+      continue;
+    }
+    steerGroup.isSteer = true;
+    steerGroup.steerParent = parentGroup;
+    parentGroup.steerChildren.push(steerGroup);
+  }
   return groups;
+}
+
+function getSteerChainSummaryRecords(group) {
+  const seenGroups = new Set();
+  const seenRecords = new Set();
+  const records = [];
+  const pending = [group];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || seenGroups.has(current)) {
+      continue;
+    }
+    seenGroups.add(current);
+    for (const record of current.summaryRecords || current.records) {
+      if (!seenRecords.has(record)) {
+        seenRecords.add(record);
+        records.push(record);
+      }
+    }
+    pending.push(current.steerParent, ...(current.steerChildren || []));
+  }
+  return records.sort((left, right) => Number(left.line) - Number(right.line));
 }
 
 function summarizeGroup(group) {
@@ -3779,7 +3873,7 @@ function buildGroupFinalAnswer(group) {
     id: `final-${finalAnswerRecord.line}`,
     title: getCompactText(getMessageText(finalAnswerRecord)) || "Final answer",
     records: [finalAnswerRecord],
-    patchFiles: getRecordsPatchFiles(group.summaryRecords || group.records),
+    patchFiles: getRecordsPatchFiles(getSteerChainSummaryRecords(group)),
     groupIndex: group.index
   };
 }
@@ -3831,7 +3925,7 @@ function renderSidebarGroup(group, callById) {
     .map(section => renderSidebarAssistantSection(section, callById))
     .join("");
   return `
-    <details data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
+    <details${group.isSteer ? ' class="rollout-steer-nav"' : ""} data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
       <summary><span class="rollout-nav-label">${escapeHtml(label)}</span></summary>
       <div class="rollout-tree-children">
         <a href="#${escapeAttribute(group.id)}">${escapeHtml(label)}</a>
@@ -4344,6 +4438,7 @@ function renderTurnGroup(group, context) {
   const sections = buildGroupSections(group);
   const lazyBodyKey = storeLazyRolloutContent(sections.map(section => renderGroupSection(section, context)).join(""));
   const meta = [
+    group.isSteer ? "steer" : "",
     duration != null ? formatDuration(duration) : "",
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
@@ -4352,7 +4447,7 @@ function renderTurnGroup(group, context) {
     counts.failed ? `${formatNumber(counts.failed)} failed` : ""
   ].filter(Boolean);
   return `
-    <details class="rollout-turn" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}" data-rollout-state-key="${escapeAttribute(group.id)}:body" data-rollout-lazy-turn data-rollout-lazy-key="${escapeAttribute(lazyBodyKey)}">
+    <details class="rollout-turn${group.isSteer ? " rollout-steer-turn" : ""}" id="${escapeAttribute(group.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(group.id)}" data-rollout-state-key="${escapeAttribute(group.id)}:body" data-rollout-lazy-turn data-rollout-lazy-key="${escapeAttribute(lazyBodyKey)}">
       <summary>
         <div class="rollout-turn-title">
           <h2>${renderDirectoryPatchStats(group.records)}<span class="rollout-turn-heading-text">${escapeHtml(group.isPreamble ? title : `${group.index}. ${title}`)}</span></h2>
