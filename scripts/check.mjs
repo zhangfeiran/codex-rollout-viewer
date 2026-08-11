@@ -408,6 +408,15 @@ async function checkMarkdownRendering() {
     [[33, "response_item"], [34, "response_item"], [37, "response_item"]],
     "adjacent event_msg mirrors must be removed while identical messages from separate turns remain"
   );
+  const environmentContextRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 38, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "\n<environment_context>\n<cwd>/repo</cwd>\n</environment_context>\n" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn" } } } },
+    { line: 39, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Actual request" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn" } } } }
+  ]);
+  assert.deepEqual(
+    Array.from(environmentContextRecords, record => record.line),
+    [39],
+    "environment-only user messages must not create a separate renderable turn"
+  );
   const completedGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords);
   const originalSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[0]);
   const steerSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[1]);

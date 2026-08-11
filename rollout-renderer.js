@@ -2467,7 +2467,9 @@ function combineToolCallRecords(records) {
 
 function createRenderableRecords(records) {
   const mirroredEventMessages = getMirroredEventMessages(records);
-  const isDropped = record => mirroredEventMessages.has(record) || shouldDropRecord(record);
+  const isDropped = record => mirroredEventMessages.has(record)
+    || isEnvironmentContextOnlyMessageRecord(record)
+    || shouldDropRecord(record);
   const bestMessageByKey = new Map();
   for (const record of records) {
     if (isDropped(record)) {
@@ -2549,6 +2551,13 @@ function getRecordKind(record) {
 
 function isUserMessageRecord(record) {
   return getPayloadRole(record) === "user" && (getPayloadType(record) === "message" || getPayloadType(record) === "user_message");
+}
+
+function isEnvironmentContextOnlyMessageRecord(record) {
+  if (!isUserMessageRecord(record)) {
+    return false;
+  }
+  return /^<environment_context>[\s\S]*<\/environment_context>$/.test(getMessageText(record).trim());
 }
 
 function isMessageLikeRecord(record) {
