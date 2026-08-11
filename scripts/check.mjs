@@ -395,6 +395,19 @@ async function checkMarkdownRendering() {
     { line: 31, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }], internal_chat_message_metadata_passthrough: { turn_id: "repeat-b" } } } }
   ]);
   assert.equal(repeatedTextRecords.length, 2, "identical user text from different turns must not be deduplicated before steer detection");
+  const mirroredMessageRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 32, value: { type: "event_msg", payload: { type: "agent_message", phase: "commentary", message: "Working update" } } },
+    { line: 33, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working update" }], internal_chat_message_metadata_passthrough: { turn_id: "mirror-a" } } } },
+    { line: 34, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }], internal_chat_message_metadata_passthrough: { turn_id: "mirror-b" } } } },
+    { line: 35, value: { type: "event_msg", payload: { type: "user_message", message: "Continue" } } },
+    { line: 36, value: { type: "event_msg", payload: { type: "agent_message", phase: "commentary", message: "Working update" } } },
+    { line: 37, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working update" }], internal_chat_message_metadata_passthrough: { turn_id: "mirror-c" } } } }
+  ]);
+  assert.deepEqual(
+    Array.from(mirroredMessageRecords, record => [record.line, record.value.type]),
+    [[33, "response_item"], [34, "response_item"], [37, "response_item"]],
+    "adjacent event_msg mirrors must be removed while identical messages from separate turns remain"
+  );
   const completedGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords);
   const originalSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[0]);
   const steerSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[1]);

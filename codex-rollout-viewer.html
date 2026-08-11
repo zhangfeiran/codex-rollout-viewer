@@ -2881,6 +2881,40 @@ function getRecordPriority(record) {
   return 1;
 }
 
+function isMirroredMessagePair(left, right) {
+  const leftRecordType = left?.value?.type;
+  const rightRecordType = right?.value?.type;
+  const responseRecord = leftRecordType === "response_item" ? left
+    : rightRecordType === "response_item" ? right
+    : null;
+  const eventRecord = leftRecordType === "event_msg" ? left
+    : rightRecordType === "event_msg" ? right
+    : null;
+  if (!responseRecord || !eventRecord
+    || getPayloadType(responseRecord) !== "message"
+    || !["agent_message", "user_message"].includes(getPayloadType(eventRecord))) {
+    return false;
+  }
+  const responseText = normalizeMessageForDedup(getMessageText(responseRecord));
+  const eventText = normalizeMessageForDedup(getMessageText(eventRecord));
+  return Boolean(responseText)
+    && responseText === eventText
+    && getCanonicalMessageRole(responseRecord) === getCanonicalMessageRole(eventRecord)
+    && (responseRecord.value?.payload?.phase || "") === (eventRecord.value?.payload?.phase || "");
+}
+
+function getMirroredEventMessages(records) {
+  const mirroredEvents = new Set();
+  for (let index = 1; index < records.length; index += 1) {
+    const previous = records[index - 1];
+    const current = records[index];
+    if (isMirroredMessagePair(previous, current)) {
+      mirroredEvents.add(previous.value?.type === "event_msg" ? previous : current);
+    }
+  }
+  return mirroredEvents;
+}
+
 function shouldDropRecord(record) {
   const payloadType = getPayloadType(record);
   const payload = record.value?.payload ?? {};
@@ -2951,9 +2985,11 @@ function combineToolCallRecords(records) {
 }
 
 function createRenderableRecords(records) {
+  const mirroredEventMessages = getMirroredEventMessages(records);
+  const isDropped = record => mirroredEventMessages.has(record) || shouldDropRecord(record);
   const bestMessageByKey = new Map();
   for (const record of records) {
-    if (shouldDropRecord(record)) {
+    if (isDropped(record)) {
       continue;
     }
     const key = getMessageDedupKey(record);
@@ -2968,7 +3004,7 @@ function createRenderableRecords(records) {
 
   const seenMessages = new Set();
   const filteredRecords = records.filter(record => {
-    if (shouldDropRecord(record)) {
+    if (isDropped(record)) {
       return false;
     }
     const key = getMessageDedupKey(record);
