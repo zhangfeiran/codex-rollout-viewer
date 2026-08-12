@@ -2396,6 +2396,28 @@ function getMirroredEventMessages(records) {
   return mirroredEvents;
 }
 
+function normalizeFileChangeRecord(record) {
+  const payload = record.value?.payload ?? {};
+  const item = payload.item;
+  if (record.value?.type !== "event_msg" || payload.type !== "item_completed"
+    || item?.type !== "FileChange" || !item.changes || typeof item.changes !== "object") {
+    return record;
+  }
+  return {
+    ...record,
+    value: {
+      ...record.value,
+      payload: {
+        ...payload,
+        type: "patch_apply_end",
+        success: item.status !== "failed",
+        status: item.status || "completed",
+        changes: item.changes
+      }
+    }
+  };
+}
+
 function shouldDropRecord(record) {
   const payloadType = getPayloadType(record);
   const payload = record.value?.payload ?? {};
@@ -2466,12 +2488,13 @@ function combineToolCallRecords(records) {
 }
 
 function createRenderableRecords(records) {
-  const mirroredEventMessages = getMirroredEventMessages(records);
+  const normalizedRecords = records.map(normalizeFileChangeRecord);
+  const mirroredEventMessages = getMirroredEventMessages(normalizedRecords);
   const isDropped = record => mirroredEventMessages.has(record)
     || isEnvironmentContextOnlyMessageRecord(record)
     || shouldDropRecord(record);
   const bestMessageByKey = new Map();
-  for (const record of records) {
+  for (const record of normalizedRecords) {
     if (isDropped(record)) {
       continue;
     }
@@ -2486,7 +2509,7 @@ function createRenderableRecords(records) {
   }
 
   const seenMessages = new Set();
-  const filteredRecords = records.filter(record => {
+  const filteredRecords = normalizedRecords.filter(record => {
     if (isDropped(record)) {
       return false;
     }

@@ -90,6 +90,28 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /getFolderTabColor\(slot\.directoryId\)/, "rollout tabs must reuse their sessions-folder tab color");
   assert.match(bootScript, /data-back-index/, "Back to index must live in the workspace tab row");
   assert.match(bootScript, /label: summarizeText\(item\.title \|\| item\.name, 64\)/, "opening an indexed rollout must create a title-based tab");
+  assert.match(
+    bootScript,
+    /const existingSlot = workspaceSlots\.find\(slot => slot\.sourceId === getSourceStateId\(item\.source\)\);[\s\S]*?if \(existingSlot\) \{[\s\S]*?await activateWorkspaceSlot\(existingSlot\.id\);[\s\S]*?return;[\s\S]*?workspaceSlots\.push\(slot\);/,
+    "opening an indexed rollout must activate its existing tab before creating a new slot"
+  );
+  const renderIndexedRolloutMatch = bootScript.match(/(async function renderIndexedRollout\(id\) \{[\s\S]*?\n    \})\n\n    async function openSessionsFoldersTab/);
+  assert.ok(renderIndexedRolloutMatch, "the indexed rollout activation function must remain testable");
+  const activatedSlotIds = [];
+  const tabReuseContext = {
+    rolloutIndex: [{ id: "rollout-row", source: { directoryId: "folder-a", path: "2026/rollout.jsonl" } }],
+    workspaceSlots: [{ id: "existing-slot", sourceId: "folder-a::2026/rollout.jsonl" }],
+    getSourceStateId(source) {
+      return [source.directoryId || "", source.path || source.name || ""].filter(Boolean).join("::");
+    },
+    async activateWorkspaceSlot(id) {
+      activatedSlotIds.push(id);
+    }
+  };
+  vm.runInNewContext(`${renderIndexedRolloutMatch[1]}\nglobalThis.testRenderIndexedRollout = renderIndexedRollout;`, tabReuseContext);
+  await tabReuseContext.testRenderIndexedRollout("rollout-row");
+  assert.deepEqual(activatedSlotIds, ["existing-slot"], "an indexed rollout already open in a tab must activate that tab");
+  assert.equal(tabReuseContext.workspaceSlots.length, 1, "reopening an indexed rollout must not create a duplicate tab");
   assert.match(bootScript, /getFolderTabColor\(entry\.id\)/, "folder tabs must use stable folder colors");
   assert.match(bootScript, /directoryId: source\.directoryId \|\| ""/, "restored rollout slots must refresh their folder identity from the source");
   assert.match(bootScript, /url\.searchParams\.set\("slot", newSlotId\)/, "each independent window must receive a newly generated slot id");
@@ -340,6 +362,19 @@ async function checkMarkdownRendering() {
     [["/repo/src/new-plan.md", 3, 0], ["/repo/src/existing.js", 1, 1]],
     "empty Add File event diffs must recover from the matching apply_patch input"
   );
+  const fileChangeRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 23, value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "file-change-call", input: "await tools.apply_patch(\"*** Begin Patch\\n*** End Patch\")", internal_chat_message_metadata_passthrough: { turn_id: "file-change-turn" } } } },
+    { line: 24, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "file-change-turn", item: { type: "FileChange", status: "completed", changes: { "/repo/src/new.js": { type: "add", unified_diff: "@@ -0,0 +1,1 @@\n+new\n", move_path: null } } } } } },
+    { line: 25, value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "file-change-call", output: [{ type: "input_text", text: "Script completed\\n" }], internal_chat_message_metadata_passthrough: { turn_id: "file-change-turn" } } } }
+  ]);
+  assert.equal(fileChangeRecords.length, 1, "new FileChange records must attach to their tool call instead of rendering as a separate event");
+  assert.deepEqual(
+    Array.from(rendererContext.__rolloutTest.getRecordsPatchFiles(fileChangeRecords), file => [file.path, file.additions, file.deletions]),
+    [["/repo/src/new.js", 1, 0]],
+    "item_completed FileChange records must feed changed-file diff summaries"
+  );
+  const fileChangeHtml = rendererContext.__rolloutTest.renderToolCallGroup(fileChangeRecords[0]);
+  assert.match(fileChangeHtml, /apply_patch[\s\S]*Copy diff[\s\S]*Unified[\s\S]*Split[\s\S]*src\/new\.js/, "new FileChange records must render their diff controls and changed path inside the tool card");
   const wordDiffPair = rendererContext.__rolloutTest.renderWordDiffPair("count = 2", "count = 8");
   assert.equal(wordDiffPair.deletedHtml, 'count = <span class="rollout-diff-word-delete">2</span>', "word diff must highlight only the replaced deletion token");
   assert.equal(wordDiffPair.addedHtml, 'count = <span class="rollout-diff-word-add">8</span>', "word diff must highlight only the replaced addition token");
