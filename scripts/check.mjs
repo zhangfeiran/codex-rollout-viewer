@@ -385,6 +385,31 @@ async function checkMarkdownRendering() {
     [["/repo/src/new-plan.md", 3, 0], ["/repo/src/existing.js", 1, 1]],
     "empty Add File event diffs must recover from the matching apply_patch input"
   );
+  const dynamicAddInput = [
+    "const content = String.raw`alpha",
+    "beta",
+    "gamma`;",
+    "const patch = \"*** Begin Patch\\n*** Add File: /repo/src/dynamic.md\\n\" +",
+    "  content.split(\"\\n\").map(line => \"+\" + line).join(\"\\n\") +",
+    "  \"\\n*** End Patch\";",
+    "text(await tools.apply_patch(patch));"
+  ].join("\n");
+  const dynamicAddRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 13, value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "call-dynamic-add", input: dynamicAddInput } } },
+    { line: 14, value: { type: "event_msg", payload: { type: "patch_apply_end", success: true, changes: { "/repo/src/dynamic.md": { type: "add", unified_diff: "", move_path: null } } } } },
+    { line: 15, value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-dynamic-add", output: [{ type: "input_text", text: "Script completed\\n" }] } } },
+    { line: 16, value: { type: "response_item", payload: { type: "custom_tool_call", name: "apply_patch", call_id: "call-dynamic-update", input: "*** Begin Patch\n*** Update File: /repo/src/dynamic.md\n@@\n alpha\n-beta\n gamma\n*** End Patch" } } },
+    { line: 17, value: { type: "event_msg", payload: { type: "patch_apply_end", success: true, changes: { "/repo/src/dynamic.md": { type: "update", unified_diff: "@@ -1,3 +1,2 @@\n alpha\n-beta\n gamma\n", move_path: null } } } } },
+    { line: 18, value: { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-dynamic-update", output: "Success" } } }
+  ]);
+  const dynamicAddFiles = rendererContext.__rolloutTest.getRecordsPatchFiles(dynamicAddRecords);
+  assert.deepEqual(
+    Array.from(dynamicAddFiles, file => [file.path, file.changeType, file.additions, file.deletions]),
+    [["/repo/src/dynamic.md", "add", 2, 0]],
+    "dynamically constructed Add File patches must compose into the final added content"
+  );
+  assert.match(dynamicAddFiles[0].unifiedDiff, /^@@ -0,0 \+1,2 @@\n\+alpha\n\+gamma$/);
+  assert.doesNotMatch(dynamicAddFiles[0].unifiedDiff, /beta/, "lines removed after a dynamic Add File patch must disappear from the aggregate diff");
   const fileChangeRecords = rendererContext.__rolloutTest.createRenderableRecords([
     { line: 23, value: { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "file-change-call", input: "await tools.apply_patch(\"*** Begin Patch\\n*** End Patch\")", internal_chat_message_metadata_passthrough: { turn_id: "file-change-turn" } } } },
     { line: 24, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "file-change-turn", item: { type: "FileChange", status: "completed", changes: { "/repo/src/new.js": { type: "add", unified_diff: "@@ -0,0 +1,1 @@\n+new\n", move_path: null } } } } } },

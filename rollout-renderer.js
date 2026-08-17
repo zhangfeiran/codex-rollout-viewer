@@ -2995,6 +2995,197 @@ function readJsStringLiteral(source, start) {
   return null;
 }
 
+function skipJsWhitespace(source, start) {
+  let index = start;
+  while (index < source.length && /\s/.test(source[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function readJsRawTemplateLiteral(source, start) {
+  if (source[start] !== "`") {
+    return null;
+  }
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "$" && source[index + 1] === "{") {
+      return null;
+    }
+    if (character === "`") {
+      return {
+        value: source.slice(start + 1, index),
+        end: index + 1
+      };
+    }
+  }
+  return null;
+}
+
+function readStaticLineMapExpression(source, start, value) {
+  let index = skipJsWhitespace(source, start);
+  if (!source.startsWith(".split", index)) {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + ".split".length);
+  if (source[index] !== "(") {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 1);
+  const separator = readJsStringLiteral(source, index);
+  if (!separator) {
+    return null;
+  }
+  index = skipJsWhitespace(source, separator.end);
+  if (source[index] !== ")") {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 1);
+  if (!source.startsWith(".map", index)) {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + ".map".length);
+  if (source[index] !== "(") {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 1);
+  let parenthesizedParameter = false;
+  if (source[index] === "(") {
+    parenthesizedParameter = true;
+    index = skipJsWhitespace(source, index + 1);
+  }
+  const parameter = source.slice(index).match(/^([A-Za-z_$][\w$]*)/);
+  if (!parameter) {
+    return null;
+  }
+  const parameterName = parameter[1];
+  index = skipJsWhitespace(source, index + parameterName.length);
+  if (parenthesizedParameter) {
+    if (source[index] !== ")") {
+      return null;
+    }
+    index = skipJsWhitespace(source, index + 1);
+  }
+  if (!source.startsWith("=>", index)) {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 2);
+  let prefix = "";
+  let suffix = "";
+  const firstLiteral = readJsStringLiteral(source, index);
+  if (firstLiteral) {
+    prefix = firstLiteral.value;
+    index = skipJsWhitespace(source, firstLiteral.end);
+    if (source[index] !== "+") {
+      return null;
+    }
+    index = skipJsWhitespace(source, index + 1);
+    if (!source.startsWith(parameterName, index)
+      || /[\w$]/.test(source[index + parameterName.length] || "")) {
+      return null;
+    }
+    index += parameterName.length;
+  } else if (source.startsWith(parameterName, index)
+    && !/[\w$]/.test(source[index + parameterName.length] || "")) {
+    index = skipJsWhitespace(source, index + parameterName.length);
+    if (source[index] !== "+") {
+      return null;
+    }
+    index = skipJsWhitespace(source, index + 1);
+    const trailingLiteral = readJsStringLiteral(source, index);
+    if (!trailingLiteral) {
+      return null;
+    }
+    suffix = trailingLiteral.value;
+    index = trailingLiteral.end;
+  } else {
+    return null;
+  }
+  index = skipJsWhitespace(source, index);
+  if (source[index] !== ")") {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 1);
+  if (!source.startsWith(".join", index)) {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + ".join".length);
+  if (source[index] !== "(") {
+    return null;
+  }
+  index = skipJsWhitespace(source, index + 1);
+  const joiner = readJsStringLiteral(source, index);
+  if (!joiner) {
+    return null;
+  }
+  index = skipJsWhitespace(source, joiner.end);
+  if (source[index] !== ")") {
+    return null;
+  }
+  return {
+    value: value.split(separator.value).map(line => `${prefix}${line}${suffix}`).join(joiner.value),
+    end: index + 1
+  };
+}
+
+function readStaticJsStringAtom(source, start, stringVariables) {
+  let index = skipJsWhitespace(source, start);
+  if (source.startsWith("String.raw", index)
+    && !/[\w$]/.test(source[index + "String.raw".length] || "")) {
+    index = skipJsWhitespace(source, index + "String.raw".length);
+    return readJsRawTemplateLiteral(source, index);
+  }
+  const literal = readJsStringLiteral(source, index);
+  if (literal) {
+    return literal;
+  }
+  if (source[index] === "(") {
+    const expression = readStaticJsStringExpression(source, index + 1, stringVariables);
+    if (!expression) {
+      return null;
+    }
+    const end = skipJsWhitespace(source, expression.end);
+    return source[end] === ")" ? { value: expression.value, end: end + 1 } : null;
+  }
+  const identifier = source.slice(index).match(/^([A-Za-z_$][\w$]*)/);
+  if (!identifier || !stringVariables.has(identifier[1])) {
+    return null;
+  }
+  const value = stringVariables.get(identifier[1]);
+  const end = index + identifier[1].length;
+  return readStaticLineMapExpression(source, end, value) || { value, end };
+}
+
+function readStaticJsStringExpression(source, start, stringVariables) {
+  const first = readStaticJsStringAtom(source, start, stringVariables);
+  if (!first) {
+    return null;
+  }
+  let value = first.value;
+  let index = first.end;
+  while (true) {
+    const operator = skipJsWhitespace(source, index);
+    if (source[operator] !== "+") {
+      return { value, end: index };
+    }
+    const next = readStaticJsStringAtom(source, operator + 1, stringVariables);
+    if (!next) {
+      return null;
+    }
+    value += next.value;
+    index = next.end;
+  }
+}
+
 function readJsStringProperty(objectText, propertyName) {
   const escapedName = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const propertyPattern = new RegExp(`(?:^|[,{\\n])\\s*(?:["']${escapedName}["']|${escapedName})\\s*:\\s*`, "g");
@@ -3016,10 +3207,10 @@ function extractApplyPatchTexts(input, directApplyPatch = false) {
   const assignmentPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*/g;
   let match = null;
   while ((match = assignmentPattern.exec(source))) {
-    const literal = readJsStringLiteral(source, assignmentPattern.lastIndex);
-    if (literal) {
-      stringVariables.set(match[1], literal.value);
-      assignmentPattern.lastIndex = literal.end;
+    const expression = readStaticJsStringExpression(source, assignmentPattern.lastIndex, stringVariables);
+    if (expression) {
+      stringVariables.set(match[1], expression.value);
+      assignmentPattern.lastIndex = expression.end;
     }
   }
   const patches = [];
