@@ -522,8 +522,31 @@ async function checkMarkdownRendering() {
   assert.deepEqual(
     Array.from(repeatedPatchFiles, file => [file.path, file.additions, file.deletions]),
     [["src/old.js", 2, 2], ["src/added.js", 2, 0]],
-    "final summaries must merge repeated patches into one entry per changed file"
+    "final summaries must compose repeated patches into one net entry per changed file"
   );
+  const createdFileLines = Array.from({ length: 100 }, (unused, index) => `line ${index + 1}`);
+  const netAddedFileRecords = [
+    { line: 48, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/generated.txt": { type: "add", unified_diff: `@@ -0,0 +1,100 @@\n${createdFileLines.map(line => `+${line}`).join("\n")}\n` } } } } },
+    { line: 49, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/generated.txt": { type: "update", unified_diff: `@@ -96,5 +95,0 @@\n${createdFileLines.slice(95).map(line => `-${line}`).join("\n")}\n` } } } } }
+  ];
+  const netAddedFile = rendererContext.__rolloutTest.getRecordsPatchFiles(netAddedFileRecords)[0];
+  assert.deepEqual(
+    [netAddedFile.changeType, netAddedFile.additions, netAddedFile.deletions],
+    ["add", 95, 0],
+    "a file created with 100 lines and then shortened by 5 must summarize as a net 95-line addition"
+  );
+  assert.doesNotMatch(netAddedFile.unifiedDiff, /^-/m, "lines removed from a newly created file must disappear from the aggregate diff");
+  const revertedPatchFiles = rendererContext.__rolloutTest.getRecordsPatchFiles([
+    { line: 50, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/reverted.txt": { type: "update", unified_diff: "@@ -1,1 +1,1 @@\n-old\n+new\n" } } } } },
+    { line: 51, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/reverted.txt": { type: "update", unified_diff: "@@ -1,1 +1,1 @@\n-new\n+old\n" } } } } }
+  ]);
+  assert.equal(revertedPatchFiles.length, 0, "a change fully reverted within the turn must disappear from the aggregate diff");
+  const missingHunkPatchFile = rendererContext.__rolloutTest.getRecordsPatchFiles([
+    { line: 52, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/missing-diff.txt": { type: "add", unified_diff: "" } } } } },
+    { line: 53, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/missing-diff.txt": { type: "update", unified_diff: "@@ -1,1 +1,1 @@\n-old\n+new\n" } } } } }
+  ])[0];
+  assert.equal(missingHunkPatchFile.changeType, "add", "missing hunk data must fall back without losing the file lifecycle");
+  assert.equal(missingHunkPatchFile.deletions, 1, "missing hunk data must not be mistaken for a fully reverted file");
   const finalHtml = rendererContext.__rolloutTest.renderFinalAnswerSection({ ...finalSection, patchFiles: repeatedPatchFiles }, { callById: new Map() });
   assert.match(finalHtml, /1\. Finished result More details[\s\S]*final_answer[\s\S]*Finished result[\s\S]*More details[\s\S]*Changed files/, "final sections must collapse the full body into a one-line title and render the original answer before changed files");
   assert.match(finalHtml, /class="rollout-turn rollout-final-answer-turn"[\s\S]*data-rollout-level="1"/, "final sections must render as level-one turn siblings");
@@ -534,7 +557,7 @@ async function checkMarkdownRendering() {
   assert.equal((finalHtml.match(/src\/old\.js/g) || []).length, 1, "a repeatedly edited file must appear only once in the aggregate diff");
   assert.match(finalHtml, /class="rollout-final-changes" data-rollout-diff-scope>[\s\S]*data-rollout-copy-diff=[\s\S]*data-rollout-diff-mode="split"/, "final changed files must expose scoped copy and split controls");
   const repeatedGitDiff = rendererContext.__rolloutTest.getGitDiffText(repeatedPatchFiles);
-  assert.match(repeatedGitDiff, /@@ -1 \+1 @@\n-old value\n\+new value\n@@ -2 \+2 @@\n-before\n\+after/, "copied final diffs must include every merged patch for a file");
+  assert.match(repeatedGitDiff, /-old value\n-before\n\+new value\n\+after/, "copied final diffs must contain the composed net changes for a repeatedly edited file");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
   assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-49"/, "the final section must follow its user turn as a sibling");
   assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-49">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");
