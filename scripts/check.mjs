@@ -128,6 +128,29 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /options\.navigationVersion \?\? \+\+workspaceNavigationVersion/, "folder scans must ignore stale results after another tab navigation");
   assert.match(bootScript, /const navigationVersion = \+\+workspaceNavigationVersion;[\s\S]*?const shouldRender = slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion/, "rollout reads must ignore stale results after another tab navigation");
   assert.match(bootScript, /renderActiveWorkspaceView\(\{ requestPermission: true \}\)/, "clicking a persisted rollout tab must be able to restore file-system permission");
+  assert.match(bootScript, /function scrollToDocumentStartSoon\(\) \{[\s\S]*?activeWorkspaceViewKind === "folders" \|\| activeWorkspaceViewKind === "index"/, "sessions pages must guard their delayed scroll-to-top callbacks by view kind");
+  assert.match(bootScript, /function scrollToDocumentEndSoon\(\) \{[\s\S]*?activeWorkspaceViewKind === "rollout"/, "scroll-to-bottom callbacks must be limited to rollout detail views");
+  assert.match(bootScript, /async function renderDirectorySelectionPage\(notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*scrollToDocumentStartSoon\(\);/, "the sessions-folders page must scroll to the top after rendering");
+  assert.match(bootScript, /function renderRolloutIndex\(items, label, notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*scrollToDocumentStartSoon\(\);/, "session rollout indexes must scroll to the newest rows at the top after rendering");
+  assert.equal((bootScript.match(/scrollToDocumentEndSoon\(\);/g) || []).length, 2, "only rollout rendering and rollout-state restoration may request scrolling to the bottom");
+  const scrollFunctionsMatch = bootScript.match(/(function scrollDocumentSoon\(getTop, isCurrentView\) \{[\s\S]*?function scrollToDocumentEndSoon\(\) \{[\s\S]*?\n    \})\n\n    function captureRenderedUiState/);
+  assert.ok(scrollFunctionsMatch, "workspace scroll helpers must remain testable");
+  const scrollCalls = [];
+  const scrollContext = {
+    activeWorkspaceViewKind: "folders",
+    document: { body: { scrollHeight: 120 }, documentElement: { scrollHeight: 200 } },
+    window: { scrollTo(options) { scrollCalls.push(options.top); } },
+    requestAnimationFrame(callback) { callback(); },
+    setTimeout(callback) { callback(); }
+  };
+  vm.runInNewContext(`${scrollFunctionsMatch[1]}\nglobalThis.testScrollStart = scrollToDocumentStartSoon; globalThis.testScrollEnd = scrollToDocumentEndSoon;`, scrollContext);
+  scrollContext.testScrollStart();
+  scrollContext.activeWorkspaceViewKind = "rollout";
+  scrollContext.testScrollStart();
+  scrollContext.testScrollEnd();
+  scrollContext.activeWorkspaceViewKind = "index";
+  scrollContext.testScrollEnd();
+  assert.deepEqual(scrollCalls, [0, 0, 0, 200, 200, 200], "delayed scrolling must follow the currently visible workspace view");
   assert.match(bootScript, /loaded && !hadOpenDirectoryTab[\s\S]*?closeWorkspaceSlot\(rolloutSlotId\)/, "Back to index must replace the rollout tab when its folder tab was closed");
   assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "folders"/, "the folders tab must not overwrite a rollout slot view");
   assert.doesNotMatch(bootScript, /saveCurrentView\(\{\s*kind: "index"/, "folder index tabs must not overwrite a rollout slot view");

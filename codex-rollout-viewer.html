@@ -5542,6 +5542,7 @@ export async function renderLocalCodexRolloutDocument() {
       updateDefaultPathHint();
       updateSavedDirectoryButtons();
       installWorkspaceBar();
+      scrollToDocumentStartSoon();
     }
 
     function openHandleDb() {
@@ -6454,6 +6455,7 @@ export async function renderLocalCodexRolloutDocument() {
       `;
       updateDefaultPathHint();
       installWorkspaceBar();
+      scrollToDocumentStartSoon();
     }
 
     async function loadRolloutSources(sources, label, options = {}) {
@@ -6868,10 +6870,13 @@ export async function renderLocalCodexRolloutDocument() {
       );
     }
 
-    function scrollToDocumentEndSoon() {
+    function scrollDocumentSoon(getTop, isCurrentView) {
       const scroll = () => {
+        if (!isCurrentView()) {
+          return;
+        }
         window.scrollTo({
-          top: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+          top: getTop(),
           left: 0,
           behavior: "auto"
         });
@@ -6881,6 +6886,20 @@ export async function renderLocalCodexRolloutDocument() {
         requestAnimationFrame(scroll);
         setTimeout(scroll, 250);
       });
+    }
+
+    function scrollToDocumentStartSoon() {
+      scrollDocumentSoon(
+        () => 0,
+        () => activeWorkspaceViewKind === "folders" || activeWorkspaceViewKind === "index"
+      );
+    }
+
+    function scrollToDocumentEndSoon() {
+      scrollDocumentSoon(
+        () => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+        () => activeWorkspaceViewKind === "rollout"
+      );
     }
 
     function captureRenderedUiState(source) {
