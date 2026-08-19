@@ -180,7 +180,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -279,6 +279,27 @@ async function checkMarkdownRendering() {
     [6, 7],
     "token counts after post-compact activity starts must stay with that activity"
   );
+  const localCompactRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 20, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Previous task" }], internal_chat_message_metadata_passthrough: { turn_id: "previous-turn" } } } },
+    { line: 21, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "## Handoff summary\n\nContinue from here." }], internal_chat_message_metadata_passthrough: { turn_id: "compact-turn" } } } },
+    { line: 22, value: { type: "event_msg", payload: { type: "token_count" } } },
+    { line: 23, value: { type: "compacted", payload: { message: "Another model produced a handoff summary.", replacement_history: [{ type: "compaction" }] } } },
+    { line: 24, value: { type: "world_state", payload: { full: false } } },
+    { line: 25, value: { type: "turn_context", payload: { turn_id: "compact-turn" } } },
+    { line: 26, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }], internal_chat_message_metadata_passthrough: { turn_id: "compact-turn" } } } },
+    { line: 27, value: { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Continuing work." }], internal_chat_message_metadata_passthrough: { turn_id: "compact-turn" } } } }
+  ]);
+  const localCompactGroups = rendererContext.__rolloutTest.buildGroups(localCompactRecords);
+  const localCompactSummary = localCompactRecords.find(record => record.line === 21);
+  assert.equal(rendererContext.__rolloutTest.isFinalAnswerRecord(localCompactSummary), false, "a final_answer immediately consumed by local compact must not remain a completed answer");
+  assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(localCompactGroups[1]), null, "a local compact handoff must not attach as the next user turn's final answer");
+  const localCompactSection = rendererContext.__rolloutTest.buildGroupSections(localCompactGroups[0])
+    .find(section => section.kind === "compact");
+  assert.equal(localCompactSection.title, "Local compact", "top-level compacted records must use the local compact label");
+  assert.deepEqual(Array.from(localCompactSection.records, record => record.line), [21, 23, 24, 25], "the generated handoff summary and compact bridge must render in one compact section");
+  const localCompactHtml = rendererContext.__rolloutTest.renderGroupSection(localCompactSection, { callById: new Map() });
+  assert.match(localCompactHtml, /Local compact[\s\S]*local compact summary[\s\S]*Copy MD[\s\S]*Handoff summary/, "local compact must render the handoff Markdown inside the compact section");
+  assert.doesNotMatch(localCompactHtml, /phase: final_answer|Another model produced a handoff summary/, "local compact rendering must not retain final-answer labeling or duplicate the wrapper message");
 
   const sidebarHtml = rendererContext.__rolloutTest.renderSidebarGroup({
     id: "turn-1",

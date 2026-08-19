@@ -14,6 +14,8 @@ let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
+const localCompactSummaryRecords = new WeakSet();
+const localCompactSummaryByRecord = new WeakMap();
 
 const ROLLOUT_CSS = `
 :root {
@@ -2667,6 +2669,39 @@ function normalizeFileChangeRecord(record) {
   };
 }
 
+function markLocalCompactSummaryRecords(records) {
+  for (let index = 0; index < records.length; index += 1) {
+    const compactRecord = records[index];
+    if (compactRecord.value?.type !== "compacted"
+      || !String(compactRecord.value?.payload?.message || "").trim()) {
+      continue;
+    }
+    let summaryIndex = index - 1;
+    while (summaryIndex >= 0
+      && records[summaryIndex].value?.type === "event_msg"
+      && getPayloadType(records[summaryIndex]) === "token_count") {
+      summaryIndex -= 1;
+    }
+    const summaryRecord = records[summaryIndex];
+    if (summaryRecord?.value?.type !== "response_item"
+      || getPayloadType(summaryRecord) !== "message"
+      || getPayloadRole(summaryRecord) !== "assistant"
+      || summaryRecord.value?.payload?.phase !== "final_answer") {
+      continue;
+    }
+    localCompactSummaryRecords.add(summaryRecord);
+    localCompactSummaryByRecord.set(compactRecord, summaryRecord);
+  }
+}
+
+function isLocalCompactSummaryRecord(record) {
+  return Boolean(record && localCompactSummaryRecords.has(record));
+}
+
+function getLocalCompactSummaryRecord(record) {
+  return record ? localCompactSummaryByRecord.get(record) || null : null;
+}
+
 function shouldDropRecord(record) {
   const payloadType = getPayloadType(record);
   const payload = record.value?.payload ?? {};
@@ -2738,6 +2773,7 @@ function combineToolCallRecords(records) {
 
 function createRenderableRecords(records) {
   const normalizedRecords = records.map(normalizeFileChangeRecord);
+  markLocalCompactSummaryRecords(normalizedRecords);
   const mirroredEventMessages = getMirroredEventMessages(normalizedRecords);
   const isDropped = record => mirroredEventMessages.has(record)
     || isEnvironmentContextOnlyMessageRecord(record)
@@ -3748,8 +3784,15 @@ function buildGroupSections(group) {
   let currentAssistantSection = null;
   let currentCompactSection = null;
   let currentActivitySection = null;
+  const groupedLocalCompactSummaries = new Set(group.records
+    .filter(isContextCompactRecord)
+    .map(getLocalCompactSummaryRecord)
+    .filter(record => record && group.records.includes(record)));
 
   for (const record of group.records) {
+    if (groupedLocalCompactSummaries.has(record)) {
+      continue;
+    }
     if (isFinalAnswerRecord(record)) {
       currentAssistantSection = null;
       currentCompactSection = null;
@@ -3775,14 +3818,18 @@ function buildGroupSections(group) {
       if (currentCompactSection && !currentActivitySection && record.value?.type !== "compacted") {
         currentCompactSection.records.push(record);
       } else {
+        const localCompactSummary = getLocalCompactSummaryRecord(record);
+        const isLocalCompact = record.value?.type === "compacted";
         currentAssistantSection = null;
         currentActivitySection = null;
         currentCompactSection = {
           id: `compact-${record.line}`,
           kind: "compact",
-          title: "Context compacted",
-          navTitle: "Context compacted",
-          records: [record],
+          title: isLocalCompact ? "Local compact" : "Context compacted",
+          navTitle: isLocalCompact ? "Local compact" : "Context compacted",
+          records: localCompactSummary && groupedLocalCompactSummaries.has(localCompactSummary)
+            ? [localCompactSummary, record]
+            : [record],
           standalone: false
         };
         sections.push(currentCompactSection);
@@ -3860,7 +3907,9 @@ function buildGroupFinalAnswer(group) {
 }
 
 function isFinalAnswerRecord(record) {
-  return isAgentOutputRecord(record) && record.value?.payload?.phase === "final_answer";
+  return !isLocalCompactSummaryRecord(record)
+    && isAgentOutputRecord(record)
+    && record.value?.payload?.phase === "final_answer";
 }
 
 function getGroupFinalAnswerRecord(group) {
@@ -4214,6 +4263,7 @@ function renderEvent(record) {
 
 function renderContextCompactRecord(record) {
   const payload = record.value?.payload ?? {};
+  const isLocalCompact = record.value?.type === "compacted";
   const replacementHistory = Array.isArray(payload.replacement_history) ? payload.replacement_history : null;
   const replacementRoles = replacementHistory
     ? replacementHistory.reduce((counts, item) => {
@@ -4226,15 +4276,36 @@ function renderContextCompactRecord(record) {
     ? [...replacementRoles.entries()].map(([role, count]) => `${role}: ${formatNumber(count)}`).join(", ")
     : "";
   const body = renderKeyValueList([
-    ["Type", record.value?.type === "compacted" ? "compacted" : getPayloadType(record)],
+    ["Type", isLocalCompact ? "compacted" : getPayloadType(record)],
     ["Replacement History", replacementHistory ? `${formatNumber(replacementHistory.length)} items` : null],
     ["Roles", roleSummary],
-    ["Message", payload.message],
+    ["Message", getLocalCompactSummaryRecord(record) ? null : payload.message],
     ["Turn", payload.turn_id]
   ]) || `<p class="rollout-empty">Context was compacted.</p>`;
-  return renderEntry(record, "event", "context compacted", body, {
+  return renderEntry(record, "event", isLocalCompact ? "local compact" : "context compacted", body, {
     kind: "context-compact",
     roleClass: "rollout-role-event"
+  });
+}
+
+function renderLocalCompactSummaryRecord(record) {
+  const text = getMessageText(record);
+  const rawMarkdownKey = storeRawMessageMarkdown(record, text);
+  const body = text
+    ? renderCollapsibleHtml(
+      "Local compact summary",
+      renderMarkdownContent(text),
+      text.length,
+      LONG_MESSAGE_COLLAPSE_LENGTH,
+      `record-${record.line}:local-compact-summary`
+    )
+    : `<p class="rollout-empty">No local compact summary content.</p>`;
+  return renderEntry(record, "compact", "local compact summary", body, {
+    kind: "context-compact",
+    roleClass: "rollout-role-event",
+    headActionHtml: rawMarkdownKey
+      ? `<button class="rollout-copy-markdown" type="button" data-rollout-copy-markdown="${escapeAttribute(rawMarkdownKey)}" title="Copy raw Markdown">Copy MD</button>`
+      : ""
   });
 }
 
@@ -4281,6 +4352,9 @@ function renderUnknown(record) {
 
 function renderRecord(record, context) {
   const value = record.value;
+  if (isLocalCompactSummaryRecord(record)) {
+    return renderLocalCompactSummaryRecord(record);
+  }
   if (isContextCompactRecord(record)) {
     return renderContextCompactRecord(record);
   }
