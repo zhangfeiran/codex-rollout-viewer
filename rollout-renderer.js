@@ -2651,7 +2651,8 @@ function normalizeFileChangeRecord(record) {
   const payload = record.value?.payload ?? {};
   const item = payload.item;
   if (record.value?.type !== "event_msg" || payload.type !== "item_completed"
-    || item?.type !== "FileChange" || !item.changes || typeof item.changes !== "object") {
+    || item?.type !== "FileChange" || !item.changes || typeof item.changes !== "object"
+    || !Object.keys(item.changes).length) {
     return record;
   }
   return {
@@ -2706,6 +2707,9 @@ function shouldDropRecord(record) {
   const payloadType = getPayloadType(record);
   const payload = record.value?.payload ?? {};
   if (record.value?.type === "event_msg" && payloadType === "agent_message" && payload.phase === "final_answer") {
+    return true;
+  }
+  if (record.value?.type === "event_msg" && payloadType === "item_completed") {
     return true;
   }
   return payloadType === "reasoning" || payloadType === "token_count";

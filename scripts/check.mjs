@@ -444,6 +444,12 @@ async function checkMarkdownRendering() {
   );
   const fileChangeHtml = rendererContext.__rolloutTest.renderToolCallGroup(fileChangeRecords[0]);
   assert.match(fileChangeHtml, /apply_patch[\s\S]*Copy diff[\s\S]*Unified[\s\S]*Split[\s\S]*src\/new\.js/, "new FileChange records must render their diff controls and changed path inside the tool card");
+  const rawItemCompletedRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 26, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-empty", item: { type: "Reasoning", id: "reasoning-empty", summary_text: [], raw_content: [] } } } },
+    { line: 27, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-mirrored", item: { type: "AgentMessage", id: "message-mirrored", content: [{ type: "Text", text: "Already represented by a response_item." }] } } } },
+    { line: 28, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-empty-change", item: { type: "FileChange", id: "file-change-empty", status: "completed", changes: {} } } } }
+  ]);
+  assert.deepEqual(Array.from(rawItemCompletedRecords, record => record.line), [], "raw item_completed lifecycle records must not render empty event cards");
   const wordDiffPair = rendererContext.__rolloutTest.renderWordDiffPair("count = 2", "count = 8");
   assert.equal(wordDiffPair.deletedHtml, 'count = <span class="rollout-diff-word-delete">2</span>', "word diff must highlight only the replaced deletion token");
   assert.equal(wordDiffPair.addedHtml, 'count = <span class="rollout-diff-word-add">8</span>', "word diff must highlight only the replaced addition token");
