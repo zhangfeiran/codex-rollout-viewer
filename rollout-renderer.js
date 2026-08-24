@@ -3518,6 +3518,7 @@ function renderHeader(records, parseErrors, options = {}) {
   const stats = summarizeRecords(records, parseErrors);
   const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
   const chips = [
+    options.sessionFolderName ? `Session folder: ${options.sessionFolderName}` : null,
     session?.cwd,
     session?.model_provider,
     session?.originator,
@@ -4573,7 +4574,7 @@ function renderDocument(records, errors, options = {}) {
   article.innerHTML = `
     ${renderSidebar(records, groups, errors, callById, { fileName, sourceUrl })}
     <main class="rollout-main">
-      ${renderHeader(records, errors, { fileName, sourceUrl })}
+      ${renderHeader(records, errors, { fileName, sourceUrl, sessionFolderName: options.sessionFolderName })}
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
         ${groups.map(group => renderTurnGroupWithFinalAnswer(group, context)).join("")}
@@ -5026,7 +5027,8 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   const records = createRenderableRecords(parsed.records);
   renderDocument(records, parsed.errors, {
     fileName: options.fileName,
-    sourceUrl: options.sourceUrl || options.fileName || location.href
+    sourceUrl: options.sourceUrl || options.fileName || location.href,
+    sessionFolderName: options.sessionFolderName
   });
   await enhanceRenderedContent();
   return {
@@ -5041,7 +5043,8 @@ export async function renderCodexRolloutRecords(parsed, options = {}) {
   const records = createRenderableRecords(parsed?.records || []);
   renderDocument(records, parsed?.errors || [], {
     fileName: options.fileName,
-    sourceUrl: options.sourceUrl || options.fileName || location.href
+    sourceUrl: options.sourceUrl || options.fileName || location.href,
+    sessionFolderName: options.sessionFolderName
   });
   await enhanceRenderedContent();
   return {

@@ -114,6 +114,7 @@ async function checkLocalHtml(fileName) {
   assert.equal(tabReuseContext.workspaceSlots.length, 1, "reopening an indexed rollout must not create a duplicate tab");
   assert.match(bootScript, /getFolderTabColor\(entry\.id\)/, "folder tabs must use stable folder colors");
   assert.match(bootScript, /directoryId: source\.directoryId \|\| ""/, "restored rollout slots must refresh their folder identity from the source");
+  assert.match(bootScript, /sessionFolderName: source\.directoryLabel \|\| ""/, "rollout detail rendering must receive its sessions-folder name");
   assert.match(bootScript, /url\.searchParams\.set\("slot", newSlotId\)/, "each independent window must receive a newly generated slot id");
   assert.match(bootScript, /saveCurrentRollout\(rollout, newSlotId\)/, "independent windows must clone rollout state into their own storage keys");
   assert.doesNotMatch(bootScript, /function renderHome\s*\(/, "the viewer must not keep a separate home screen");
@@ -180,9 +181,21 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderHeader, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
+  );
+
+  const sourceHeaderHtml = rendererContext.__rolloutTest.renderHeader([], [], {
+    fileName: "rollout.jsonl",
+    sourceUrl: "sessions129/rollout.jsonl",
+    sessionFolderName: "sessions129"
+  });
+  assert.match(sourceHeaderHtml, /Session folder: sessions129/, "rollout detail headers must identify their source sessions folder");
+  assert.doesNotMatch(
+    rendererContext.__rolloutTest.renderHeader([], [], { fileName: "standalone.jsonl", sourceUrl: "standalone.jsonl" }),
+    /Session folder:/,
+    "standalone JSONL files must not claim a sessions-folder source"
   );
 
   const markdown = [
