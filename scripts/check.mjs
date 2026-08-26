@@ -463,6 +463,16 @@ async function checkMarkdownRendering() {
     { line: 28, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-empty-change", item: { type: "FileChange", id: "file-change-empty", status: "completed", changes: {} } } } }
   ]);
   assert.deepEqual(Array.from(rawItemCompletedRecords, record => record.line), [], "raw item_completed lifecycle records must not render empty event cards");
+  const completedAgentMessageRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 29, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Finish this turn" }], internal_chat_message_metadata_passthrough: { turn_id: "turn-completed-agent" } } } },
+    { line: 30, value: { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-completed-agent", item: { type: "AgentMessage", id: "message-completed-agent", phase: "final_answer", content: [{ type: "Text", text: "Finished result" }] } } } },
+    { line: 31, value: { type: "response_item", payload: { type: "message", id: "message-completed-agent", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Finished result with details" }], internal_chat_message_metadata_passthrough: { turn_id: "model-subturn" } } } }
+  ]);
+  const completedAgentMessageGroup = rendererContext.__rolloutTest.buildGroups(completedAgentMessageRecords)[0];
+  const completedAgentMessageFinal = rendererContext.__rolloutTest.buildGroupFinalAnswer(completedAgentMessageGroup);
+  assert.deepEqual(Array.from(completedAgentMessageRecords, record => record.line), [29, 31], "paired item_completed AgentMessage records must not render separately");
+  assert.equal(completedAgentMessageFinal?.records[0].line, 31, "the richer response_item final answer must inherit its paired item_completed turn ownership");
+  assert.equal(completedAgentMessageFinal?.title, "Finished result with details", "paired final answers must keep the complete response_item content");
   const wordDiffPair = rendererContext.__rolloutTest.renderWordDiffPair("count = 2", "count = 8");
   assert.equal(wordDiffPair.deletedHtml, 'count = <span class="rollout-diff-word-delete">2</span>', "word diff must highlight only the replaced deletion token");
   assert.equal(wordDiffPair.addedHtml, 'count = <span class="rollout-diff-word-add">8</span>', "word diff must highlight only the replaced addition token");

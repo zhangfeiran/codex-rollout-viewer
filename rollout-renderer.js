@@ -2488,7 +2488,8 @@ function getSessionMeta(records) {
 }
 
 function getTurnId(record) {
-  return record?.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
+  return record?.effectiveTurnId
+    ?? record?.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
     ?? record?.value?.payload?.turn_id
     ?? record?.value?.turn_id
     ?? null;
@@ -2670,6 +2671,28 @@ function normalizeFileChangeRecord(record) {
   };
 }
 
+function normalizeCompletedAgentMessageTurnIds(records) {
+  const turnIdByMessageId = new Map();
+  for (const record of records) {
+    const payload = record.value?.payload ?? {};
+    const item = payload.item;
+    if (record.value?.type === "event_msg" && payload.type === "item_completed"
+      && item?.type === "AgentMessage" && item.id && payload.turn_id) {
+      turnIdByMessageId.set(item.id, payload.turn_id);
+    }
+  }
+  return records.map(record => {
+    const payload = record.value?.payload ?? {};
+    const effectiveTurnId = record.value?.type === "response_item"
+      && payload.type === "message"
+      && (payload.role === "assistant" || payload.role === "agent")
+      && payload.id
+      ? turnIdByMessageId.get(payload.id)
+      : null;
+    return effectiveTurnId ? { ...record, effectiveTurnId } : record;
+  });
+}
+
 function markLocalCompactSummaryRecords(records) {
   for (let index = 0; index < records.length; index += 1) {
     const compactRecord = records[index];
@@ -2776,7 +2799,7 @@ function combineToolCallRecords(records) {
 }
 
 function createRenderableRecords(records) {
-  const normalizedRecords = records.map(normalizeFileChangeRecord);
+  const normalizedRecords = normalizeCompletedAgentMessageTurnIds(records.map(normalizeFileChangeRecord));
   markLocalCompactSummaryRecords(normalizedRecords);
   const mirroredEventMessages = getMirroredEventMessages(normalizedRecords);
   const isDropped = record => mirroredEventMessages.has(record)
