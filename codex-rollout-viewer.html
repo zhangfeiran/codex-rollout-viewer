@@ -5757,6 +5757,18 @@ export async function renderLocalCodexRolloutDocument() {
       return `slot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
     }
 
+    function normalizeRolloutUuid(value) {
+      const match = String(value || "")
+        .match(/(?:^|[^0-9a-f])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[^0-9a-f]|$)/i);
+      return match?.[1]?.toLowerCase() || "";
+    }
+
+    function getSourceRolloutId(source) {
+      return normalizeRolloutUuid(source?.rolloutId)
+        || normalizeRolloutUuid(source?.path)
+        || normalizeRolloutUuid(source?.name);
+    }
+
     function normalizeWorkspaceSlot(slot, index = 0) {
       const createdAt = Number.isFinite(slot?.createdAt) ? slot.createdAt : Date.now();
       const autoRefreshMs = AUTO_REFRESH_INTERVALS.includes(Number(slot?.autoRefreshMs))
@@ -5764,6 +5776,9 @@ export async function renderLocalCodexRolloutDocument() {
         : 0;
       return {
         id: String(slot?.id || (index === 0 ? DEFAULT_WORKSPACE_SLOT_ID : createWorkspaceSlotId())),
+        rolloutId: normalizeRolloutUuid(slot?.rolloutId)
+          || normalizeRolloutUuid(slot?.sourceId)
+          || normalizeRolloutUuid(slot?.label),
         label: String(slot?.label || (index === 0 ? "Default" : `Session ${index + 1}`)),
         sourceId: String(slot?.sourceId || ""),
         directoryId: String(slot?.directoryId || ""),
@@ -5783,7 +5798,20 @@ export async function renderLocalCodexRolloutDocument() {
       return workspaceSlots.find(slot => slot.id === id) || null;
     }
 
-    function getRequestedWorkspaceSlotId() {
+    function getWorkspaceSlotUrlId(slot) {
+      return normalizeRolloutUuid(slot?.rolloutId) || normalizeRolloutUuid(slot?.sourceId);
+    }
+
+    function getWorkspaceSlotByRolloutId(rolloutId, preferredSlotId = "") {
+      const normalized = normalizeRolloutUuid(rolloutId);
+      if (!normalized) {
+        return null;
+      }
+      const matches = workspaceSlots.filter(slot => getWorkspaceSlotUrlId(slot) === normalized);
+      return matches.find(slot => slot.id === preferredSlotId) || matches[0] || null;
+    }
+
+    function getRequestedRolloutId() {
       try {
         return new URL(location.href).searchParams.get("slot") || "";
       } catch {
@@ -5823,7 +5851,12 @@ export async function renderLocalCodexRolloutDocument() {
       if (options.updateUrl === true) {
         try {
           const url = new URL(location.href);
-          url.searchParams.set("slot", activeWorkspaceSlotId);
+          const rolloutId = getWorkspaceSlotUrlId(slot);
+          if (rolloutId) {
+            url.searchParams.set("slot", rolloutId);
+          } else {
+            url.searchParams.delete("slot");
+          }
           history.replaceState(history.state, "", url.href);
         } catch {}
       }
@@ -5866,8 +5899,10 @@ export async function renderLocalCodexRolloutDocument() {
       try {
         sessionStorage.setItem(WORKSPACE_NAVIGATION_KEY, JSON.stringify(value));
         const url = new URL(location.href);
-        if (value.kind === "rollout" && getWorkspaceSlot(value.activeSlotId)) {
-          url.searchParams.set("slot", value.activeSlotId);
+        const activeSlot = value.kind === "rollout" ? getWorkspaceSlot(value.activeSlotId) : null;
+        const rolloutId = getWorkspaceSlotUrlId(activeSlot);
+        if (rolloutId) {
+          url.searchParams.set("slot", rolloutId);
         } else {
           url.searchParams.delete("slot");
         }
@@ -5890,9 +5925,13 @@ export async function renderLocalCodexRolloutDocument() {
       const stored = await getStoredValue(WORKSPACE_SLOTS_KEY);
       workspaceSlots = (Array.isArray(stored) ? stored.map(normalizeWorkspaceSlot) : [])
         .filter(slot => !(slot.id === DEFAULT_WORKSPACE_SLOT_ID && slot.label === "Default" && !slot.sourceId));
-      const requestedId = getRequestedWorkspaceSlotId();
+      const requestedRolloutId = getRequestedRolloutId();
+      const localNavigation = getLocalWorkspaceNavigation();
       const rememberedId = getLocallyActiveWorkspaceSlotId();
-      activeWorkspaceSlotId = getWorkspaceSlot(requestedId)?.id
+      const requestedSlot = getWorkspaceSlotByRolloutId(requestedRolloutId, localNavigation?.activeSlotId)
+        || getWorkspaceSlot(requestedRolloutId);
+      activeWorkspaceSlotId = requestedSlot?.id
+        || getWorkspaceSlot(localNavigation?.activeSlotId)?.id
         || getWorkspaceSlot(rememberedId)?.id
         || workspaceSlots[0]?.id
         || DEFAULT_WORKSPACE_SLOT_ID;
@@ -5984,6 +6023,7 @@ export async function renderLocalCodexRolloutDocument() {
           ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index title="Return to the source folder tab">Back to index</button>` : ""}
           <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
           <button class="standalone-workspace-action" type="button" data-refresh-all-workspace-slots ${workspaceSlots.some(slot => slot.sourceId) ? "" : "disabled"}>Refresh all</button>
+          <button class="standalone-workspace-action" type="button" data-close-all-workspace-slots ${workspaceSlots.length ? "" : "disabled"} title="Close all rollout tabs">Close rollouts</button>
           <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh title="Automatic refresh for this session" ${activeSlot ? "" : "disabled"}>
             ${AUTO_REFRESH_INTERVALS.map(value => `<option value="${value}" ${activeSlot?.autoRefreshMs === value ? "selected" : ""}>${formatWorkspaceRefreshOption(value)}</option>`).join("")}
           </select>
@@ -6536,7 +6576,7 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function createSourceFromFile(file, relativePath = file.name) {
-      return {
+      const source = {
         name: file.name,
         path: relativePath || file.name,
         lastModified: file.lastModified,
@@ -6552,12 +6592,15 @@ export async function renderLocalCodexRolloutDocument() {
           return file.slice(start, end).text();
         }
       };
+      source.rolloutId = getSourceRolloutId(source);
+      return source;
     }
 
     function createSourceFromFileHandle(fileHandle, relativePath, options = {}) {
-      return {
+      const source = {
         name: fileHandle.name,
         path: relativePath || fileHandle.name,
+        rolloutId: normalizeRolloutUuid(options.rolloutId),
         directoryId: options.directoryId || "",
         directoryLabel: options.directoryLabel || "",
         fileHandle,
@@ -6578,6 +6621,8 @@ export async function renderLocalCodexRolloutDocument() {
           return (await fileHandle.getFile()).lastModified;
         }
       };
+      source.rolloutId ||= getSourceRolloutId(source);
+      return source;
     }
 
     async function* walkDirectoryHandle(directoryHandle, basePath = "", options = {}) {
@@ -6683,6 +6728,9 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function attachSourceToIndexItem(item, source, index) {
+      source.rolloutId = normalizeRolloutUuid(item.rolloutId)
+        || normalizeRolloutUuid(item.sessionId)
+        || getSourceRolloutId(source);
       return {
         ...item,
         id: `rollout-${index}`,
@@ -6781,6 +6829,8 @@ export async function renderLocalCodexRolloutDocument() {
       const lastModified = sourceMetadata.lastModified;
       const createdAt = getRolloutTimestamp(parsed.records, session, null);
       const modifiedAt = Number.isFinite(lastModified) ? lastModified : null;
+      const rolloutId = normalizeRolloutUuid(session?.id) || getSourceRolloutId(source);
+      source.rolloutId = rolloutId;
       return {
         id: `rollout-${index}`,
         source,
@@ -6789,6 +6839,7 @@ export async function renderLocalCodexRolloutDocument() {
         folder: getFolderFromPath(source.path || source.name),
         cwd: session?.cwd || "(unknown cwd)",
         sessionId: session?.id || "",
+        rolloutId,
         timestamp: createdAt || modifiedAt,
         createdAt,
         modifiedAt,
@@ -7227,7 +7278,9 @@ export async function renderLocalCodexRolloutDocument() {
         if (!hasPermission) {
           return null;
         }
-        return createSourceFromFileHandle(saved.fileHandle, saved.path || saved.name);
+        return createSourceFromFileHandle(saved.fileHandle, saved.path || saved.name, {
+          rolloutId: saved.rolloutId
+        });
       }
       if (saved.kind === "directory" && saved.path) {
         if (!savedDirectoryEntries.length) {
@@ -7247,6 +7300,7 @@ export async function renderLocalCodexRolloutDocument() {
           return null;
         }
         return createSourceFromFileHandle(fileHandle, saved.path, {
+          rolloutId: saved.rolloutId,
           directoryId: entry.id,
           directoryLabel: getDirectoryEntryLabel(entry)
         });
@@ -7668,6 +7722,7 @@ export async function renderLocalCodexRolloutDocument() {
       if (!activeSlot) {
         const slot = normalizeWorkspaceSlot({
           id: createWorkspaceSlotId(),
+          rolloutId: getSourceRolloutId(source),
           label: source.name || "Session",
           sourceId,
           directoryId: source.directoryId || "",
@@ -7679,6 +7734,7 @@ export async function renderLocalCodexRolloutDocument() {
       }
       if (!activeSlot.sourceId || activeSlot.sourceId === sourceId) {
         await updateWorkspaceSlot(activeWorkspaceSlotId, {
+          rolloutId: getSourceRolloutId(source) || activeSlot?.rolloutId || "",
           label: source.name || activeSlot?.label || "Session",
           sourceId,
           directoryId: source.directoryId || activeSlot?.directoryId || "",
@@ -7698,6 +7754,7 @@ export async function renderLocalCodexRolloutDocument() {
       }
       const slot = normalizeWorkspaceSlot({
         id: createWorkspaceSlotId(),
+        rolloutId: getSourceRolloutId(source),
         label: source.name || `Session ${workspaceSlots.length + 1}`,
         sourceId,
         directoryId: source.directoryId || "",
@@ -7798,6 +7855,31 @@ export async function renderLocalCodexRolloutDocument() {
       const nextSlot = workspaceSlots[Math.min(index, workspaceSlots.length - 1)];
       await setActiveWorkspaceSlotId(nextSlot.id, { render: false, updateUrl: false });
       await renderActiveWorkspaceView();
+    }
+
+    async function closeAllWorkspaceSlots() {
+      const slotIds = workspaceSlots.map(slot => slot.id);
+      if (!slotIds.length) {
+        return;
+      }
+      const wasVisible = activeWorkspaceViewKind === "rollout"
+        && slotIds.includes(activeWorkspaceSlotId);
+      workspaceNavigationVersion += 1;
+      if (wasVisible) {
+        await persistCurrentRenderedUiState(activeWorkspaceSlotId);
+        currentRenderedSource = null;
+        currentRenderedUiState = null;
+      }
+      workspaceSlots = [];
+      clearActiveWorkspaceSlotSelection();
+      await saveWorkspaceSlots({ render: false });
+      await Promise.all(slotIds.map(deleteWorkspaceSlotState));
+      if (wasVisible) {
+        await renderDirectorySelectionPage();
+        return;
+      }
+      await saveWorkspaceNavigation();
+      installWorkspaceBar();
     }
 
     async function renameWorkspaceSlot(id) {
@@ -7921,9 +8003,6 @@ export async function renderLocalCodexRolloutDocument() {
         return false;
       }
       try {
-        popup.opener = null;
-      } catch {}
-      try {
         if (id === activeWorkspaceSlotId) {
           await persistCurrentRenderedUiState(id);
         }
@@ -7951,6 +8030,19 @@ export async function renderLocalCodexRolloutDocument() {
           refreshState: "idle",
           refreshMessage: "Independent window"
         }, workspaceSlots.length);
+        const rolloutId = getWorkspaceSlotUrlId(clonedSlot);
+        if (!rolloutId) {
+          throw new Error("The rollout UUID is unavailable.");
+        }
+        const popupNavigation = normalizeWorkspaceNavigation({
+          kind: "rollout",
+          activeSlotId: newSlotId,
+          openDirectoryTabIds: [...openDirectoryTabIds]
+        });
+        popup.sessionStorage.setItem(WORKSPACE_NAVIGATION_KEY, JSON.stringify(popupNavigation));
+        try {
+          popup.opener = null;
+        } catch {}
         workspaceSlots.push(clonedSlot);
         await Promise.all([
           saveWorkspaceSlots(),
@@ -7960,7 +8052,7 @@ export async function renderLocalCodexRolloutDocument() {
           renderCache != null ? saveCurrentRolloutRenderCache(renderCache, newSlotId) : Promise.resolve()
         ]);
         const url = new URL(location.href);
-        url.searchParams.set("slot", newSlotId);
+        url.searchParams.set("slot", rolloutId);
         url.hash = "";
         popup.location.replace(url.href);
         return true;
@@ -7977,6 +8069,7 @@ export async function renderLocalCodexRolloutDocument() {
       if (source.directoryId && source.path) {
         await saveCurrentRollout({
           kind: "directory",
+          rolloutId: getSourceRolloutId(source),
           directoryId: source.directoryId,
           directoryLabel: source.directoryLabel || "",
           name: source.name,
@@ -7985,6 +8078,7 @@ export async function renderLocalCodexRolloutDocument() {
       } else if (source.fileHandle) {
         await saveCurrentRollout({
           kind: "file",
+          rolloutId: getSourceRolloutId(source),
           name: source.name,
           path: source.path || source.name,
           fileHandle: source.fileHandle
@@ -7992,6 +8086,7 @@ export async function renderLocalCodexRolloutDocument() {
       } else {
         await saveCurrentRollout({
           kind: "transient",
+          rolloutId: getSourceRolloutId(source),
           name: source.name,
           path: source.path || source.name
         }, slotId);
@@ -8034,6 +8129,15 @@ export async function renderLocalCodexRolloutDocument() {
         }
         return false;
       }
+      const rolloutId = normalizeRolloutUuid(getSessionMeta(parsedResult.parsed.records)?.id)
+        || getSourceRolloutId(source);
+      if (rolloutId) {
+        source.rolloutId = rolloutId;
+        const workspaceSlot = getWorkspaceSlot(slotId);
+        if (workspaceSlot) {
+          workspaceSlot.rolloutId = rolloutId;
+        }
+      }
       await saveCurrentRolloutRenderCache(parsedResult.cache, slotId);
       if (!options.skipRemember) {
         await rememberRenderedSource(source, slotId);
@@ -8050,6 +8154,7 @@ export async function renderLocalCodexRolloutDocument() {
       const shouldRender = slotId === activeWorkspaceSlotId && navigationVersion === workspaceNavigationVersion;
       const slot = getWorkspaceSlot(slotId);
       await updateWorkspaceSlot(slotId, {
+        rolloutId,
         sourceId: getSourceStateId(source),
         directoryId: source.directoryId || "",
         directoryLabel: source.directoryLabel || "",
@@ -8103,6 +8208,7 @@ export async function renderLocalCodexRolloutDocument() {
       currentRenderedUiState = null;
       const slot = normalizeWorkspaceSlot({
         id: createWorkspaceSlotId(),
+        rolloutId: item.rolloutId || item.sessionId || getSourceRolloutId(item.source),
         label: summarizeText(item.title || item.name, 64),
         sourceId: getSourceStateId(item.source),
         directoryId: item.source.directoryId || "",
@@ -8212,7 +8318,10 @@ export async function renderLocalCodexRolloutDocument() {
         openDirectoryTabIds.add(navigation.directoryId);
       }
 
-      const requestedSlot = getWorkspaceSlot(getRequestedWorkspaceSlotId());
+      const requestedSlot = getWorkspaceSlotByRolloutId(
+        getRequestedRolloutId(),
+        navigation?.activeSlotId
+      ) || getWorkspaceSlot(getRequestedRolloutId());
       const navigationSlot = navigation?.kind === "rollout"
         ? getWorkspaceSlot(navigation.activeSlotId)
         : null;
@@ -8264,6 +8373,10 @@ export async function renderLocalCodexRolloutDocument() {
       const closeWorkspaceSlotButton = event.target.closest("[data-close-workspace-slot-id]");
       if (closeWorkspaceSlotButton) {
         await closeWorkspaceSlot(closeWorkspaceSlotButton.dataset.closeWorkspaceSlotId);
+        return;
+      }
+      if (event.target.closest("[data-close-all-workspace-slots]")) {
+        await closeAllWorkspaceSlots();
         return;
       }
       if (event.target.closest("[data-refresh-workspace-slot]")) {

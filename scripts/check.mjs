@@ -79,6 +79,8 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /getSavedCurrentRolloutRenderCache\(slotId\)/, "incremental caches must be read per workspace slot");
   assert.match(bootScript, /metadata\.size > cached\.size/, "incremental parsing must only append when a rollout grows");
   assert.match(bootScript, /data-refresh-all-workspace-slots/, "workspace UI must expose independent bulk refresh");
+  assert.match(bootScript, /data-close-all-workspace-slots/, "workspace UI must expose a close-all rollout-tabs action");
+  assert.match(bootScript, /async function closeAllWorkspaceSlots\(\) \{[\s\S]*?const slotIds = workspaceSlots\.map\(slot => slot\.id\);[\s\S]*?workspaceSlots = \[\];[\s\S]*?Promise\.all\(slotIds\.map\(deleteWorkspaceSlotState\)\)/, "closing all rollout tabs must clear their metadata and persisted slot state");
   assert.match(bootScript, /data-popout-workspace-slot/, "workspace slots must support independent windows");
   assert.match(bootScript, /data-sessions-folders-tab/, "the fixed sessions-folders tab must be rendered");
   assert.match(bootScript, /openDirectoryTabIds = new Set\(\)/, "remembered folder tabs must be tracked independently");
@@ -115,8 +117,57 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /getFolderTabColor\(entry\.id\)/, "folder tabs must use stable folder colors");
   assert.match(bootScript, /directoryId: source\.directoryId \|\| ""/, "restored rollout slots must refresh their folder identity from the source");
   assert.match(bootScript, /sessionFolderName: source\.directoryLabel \|\| ""/, "rollout detail rendering must receive its sessions-folder name");
-  assert.match(bootScript, /url\.searchParams\.set\("slot", newSlotId\)/, "each independent window must receive a newly generated slot id");
+  assert.match(bootScript, /rolloutId: normalizeRolloutUuid\(slot\?\.rolloutId\)/, "workspace slots must persist the rollout UUID separately from their internal storage id");
+  assert.match(bootScript, /getWorkspaceSlotByRolloutId\(requestedRolloutId, localNavigation\?\.activeSlotId\)/, "URL restoration must resolve rollout UUIDs while preferring this window's independent slot clone");
+  assert.match(bootScript, /\|\| getWorkspaceSlot\(requestedRolloutId\)/, "legacy internal-slot URLs must remain restorable during the rollout UUID migration");
+  assert.match(bootScript, /url\.searchParams\.set\("slot", rolloutId\)/, "rollout URLs must use the rollout UUID directly");
+  assert.doesNotMatch(bootScript, /url\.searchParams\.set\("slot", (?:activeWorkspaceSlotId|value\.activeSlotId|newSlotId)\)/, "rollout URLs must not expose internal workspace slot ids");
+  assert.match(bootScript, /popup\.sessionStorage\.setItem\(WORKSPACE_NAVIGATION_KEY, JSON\.stringify\(popupNavigation\)\)/, "independent windows must select their cloned internal slot without changing the rollout UUID URL");
   assert.match(bootScript, /saveCurrentRollout\(rollout, newSlotId\)/, "independent windows must clone rollout state into their own storage keys");
+  const slotUrlHelpersMatch = bootScript.match(/(function normalizeRolloutUuid\(value\) \{[\s\S]*?function getWorkspaceSlotByRolloutId\(rolloutId, preferredSlotId = ""\) \{[\s\S]*?\n    \})\n\n    function getRequestedRolloutId/);
+  assert.ok(slotUrlHelpersMatch, "rollout UUID slot helpers must remain testable");
+  const rolloutUuid = "01a04231-b76f-7893-b484-39f3810c9b67";
+  const slotUrlContext = {
+    AUTO_REFRESH_INTERVALS: [0],
+    DEFAULT_WORKSPACE_SLOT_ID: "default",
+    activeWorkspaceSlotId: "original-slot",
+    workspaceSlots: [
+      { id: "original-slot", rolloutId: rolloutUuid, sourceId: `folder::rollout-${rolloutUuid}.jsonl` },
+      { id: "window-slot", rolloutId: rolloutUuid, sourceId: `folder::rollout-${rolloutUuid}.jsonl` }
+    ]
+  };
+  vm.runInNewContext(
+    `${slotUrlHelpersMatch[1]}\nglobalThis.testNormalizeRolloutUuid = normalizeRolloutUuid; globalThis.testGetWorkspaceSlotByRolloutId = getWorkspaceSlotByRolloutId;`,
+    slotUrlContext
+  );
+  assert.equal(slotUrlContext.testNormalizeRolloutUuid(`rollout-${rolloutUuid}.jsonl`), rolloutUuid, "rollout UUIDs must be extracted from normal rollout filenames");
+  assert.equal(slotUrlContext.testGetWorkspaceSlotByRolloutId(rolloutUuid, "window-slot")?.id, "window-slot", "URL restoration must preserve an independent window's preferred internal slot");
+  assert.equal(slotUrlContext.testGetWorkspaceSlotByRolloutId("random-internal-slot"), null, "internal slot ids must not be accepted as rollout UUID URLs");
+  const closeAllMatch = bootScript.match(/(async function closeAllWorkspaceSlots\(\) \{[\s\S]*?\n    \})\n\n    async function renameWorkspaceSlot/);
+  assert.ok(closeAllMatch, "the close-all rollout-tabs action must remain testable");
+  const closedSlotIds = [];
+  let renderedFolderPage = false;
+  const closeAllContext = {
+    workspaceSlots: [{ id: "slot-a" }, { id: "slot-b" }],
+    activeWorkspaceViewKind: "rollout",
+    activeWorkspaceSlotId: "slot-a",
+    workspaceNavigationVersion: 0,
+    currentRenderedSource: {},
+    currentRenderedUiState: {},
+    async persistCurrentRenderedUiState() {},
+    clearActiveWorkspaceSlotSelection() {},
+    async saveWorkspaceSlots() {},
+    async deleteWorkspaceSlotState(id) { closedSlotIds.push(id); },
+    async renderDirectorySelectionPage() { renderedFolderPage = true; },
+    async saveWorkspaceNavigation() {},
+    installWorkspaceBar() {}
+  };
+  vm.runInNewContext(`${closeAllMatch[1]}\nglobalThis.testCloseAllWorkspaceSlots = closeAllWorkspaceSlots;`, closeAllContext);
+  await closeAllContext.testCloseAllWorkspaceSlots();
+  assert.equal(closeAllContext.workspaceSlots.length, 0, "Close all must remove every rollout tab");
+  assert.deepEqual(closedSlotIds.sort(), ["slot-a", "slot-b"], "Close all must delete every rollout tab's persisted state");
+  assert.equal(closeAllContext.currentRenderedSource, null, "Close all must clear the visible rollout source");
+  assert.equal(renderedFolderPage, true, "Close all from a visible rollout must return to the sessions-folders page");
   assert.doesNotMatch(bootScript, /function renderHome\s*\(/, "the viewer must not keep a separate home screen");
   assert.doesNotMatch(bootScript, /walkDroppedEntry|webkitGetAsEntry/, "dropped folders must not bypass the remembered sessions-folders flow");
   assert.match(bootScript, /async function getSourcesFromDrop\(dataTransfer\)/, "drop handling must resolve persistent JSONL file handles when available");
