@@ -543,12 +543,13 @@ async function checkMarkdownRendering() {
   );
   const environmentContextRecords = rendererContext.__rolloutTest.createRenderableRecords([
     { line: 38, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "\n<environment_context>\n<cwd>/repo</cwd>\n</environment_context>\n" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn" } } } },
-    { line: 39, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Actual request" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn" } } } }
+    { line: 39, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions for /repo\n<INSTRUCTIONS>\nRules\n</INSTRUCTIONS>" }, { type: "input_text", text: "<environment_context>\n<cwd>/repo</cwd>\n</environment_context>" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn", content_item_kinds: ["agents_md.instructions", "environments.environment_context"] } } } },
+    { line: 40, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Actual request" }], internal_chat_message_metadata_passthrough: { turn_id: "environment-turn", content_item_kinds: ["user.text"] } } } }
   ]);
   assert.deepEqual(
     Array.from(environmentContextRecords, record => record.line),
-    [39],
-    "environment-only user messages must not create a separate renderable turn"
+    [40],
+    "environment and AGENTS-only user messages must not create separate renderable turns"
   );
   const completedGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords);
   const originalSections = rendererContext.__rolloutTest.buildGroupSections(completedGroups[0]);
@@ -590,6 +591,15 @@ async function checkMarkdownRendering() {
     { value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "C" }], internal_chat_message_metadata_passthrough: { turn_id: "c" } } } }
   ]);
   assert.equal(JSON.stringify(Array.from(steerLifecycle)), JSON.stringify([["b", "a"]]), "task_complete must not end steer detection, while final_answer must end it");
+  const sameTurnSteerRecords = rendererContext.__rolloutTest.createRenderableRecords([
+    { line: 60, value: { type: "response_item", payload: { type: "message", id: "same-turn-user-a", role: "user", content: [{ type: "input_text", text: "Start" }], internal_chat_message_metadata_passthrough: { turn_id: "same-turn" } } } },
+    { line: 61, value: { type: "response_item", payload: { type: "message", id: "same-turn-user-b", role: "user", content: [{ type: "input_text", text: "Confirm" }], internal_chat_message_metadata_passthrough: { turn_id: "same-turn" } } } },
+    { line: 62, value: { type: "response_item", payload: { type: "message", id: "same-turn-user-c", role: "user", content: [{ type: "input_text", text: "Confirm" }], internal_chat_message_metadata_passthrough: { turn_id: "same-turn" } } } },
+    { line: 63, value: { type: "response_item", payload: { type: "message", id: "same-turn-final", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Done" }], internal_chat_message_metadata_passthrough: { turn_id: "same-turn" } } } }
+  ]);
+  const sameTurnSteerGroups = rendererContext.__rolloutTest.buildGroups(sameTurnSteerRecords);
+  assert.deepEqual(Array.from(sameTurnSteerGroups, group => [group.index, group.isSteer, group.steerParent?.index || null]), [[1, false, null], [2, true, 1], [3, true, 2]], "distinct same-turn user messages, including repeated text, must form an ordered steer chain");
+  assert.equal(rendererContext.__rolloutTest.buildGroupFinalAnswer(sameTurnSteerGroups[2])?.records[0].line, 63, "a same-turn steer chain final answer must attach to its latest user message");
   const repeatedPatchFiles = rendererContext.__rolloutTest.getRecordsPatchFiles([
     { line: 46, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": patchChanges["src/old.js"] } } } },
     { line: 47, value: { type: "event_msg", payload: { type: "patch_apply_end", changes: { "src/old.js": { ...patchChanges["src/old.js"], unified_diff: "@@ -2 +2 @@\n-before\n+after\n" }, "src/added.js": patchChanges["src/added.js"] } } } }

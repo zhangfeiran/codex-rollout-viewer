@@ -2598,7 +2598,9 @@ function getMessageDedupKey(record) {
   if (!text) {
     return null;
   }
-  return `${getCanonicalMessageRole(record)}\u0000${getTurnId(record) || ""}\u0000${text}`;
+  const messageId = record.value?.payload?.id;
+  const identity = messageId ? `id:${messageId}` : `text:${text}`;
+  return `${getCanonicalMessageRole(record)}\u0000${getTurnId(record) || ""}\u0000${identity}`;
 }
 
 function getRecordPriority(record) {
@@ -2803,7 +2805,7 @@ function createRenderableRecords(records) {
   markLocalCompactSummaryRecords(normalizedRecords);
   const mirroredEventMessages = getMirroredEventMessages(normalizedRecords);
   const isDropped = record => mirroredEventMessages.has(record)
-    || isEnvironmentContextOnlyMessageRecord(record)
+    || isContextOnlyUserMessageRecord(record)
     || shouldDropRecord(record);
   const bestMessageByKey = new Map();
   for (const record of normalizedRecords) {
@@ -2888,11 +2890,20 @@ function isUserMessageRecord(record) {
   return getPayloadRole(record) === "user" && (getPayloadType(record) === "message" || getPayloadType(record) === "user_message");
 }
 
-function isEnvironmentContextOnlyMessageRecord(record) {
+function isContextOnlyUserMessageRecord(record) {
   if (!isUserMessageRecord(record)) {
     return false;
   }
-  return /^<environment_context>[\s\S]*<\/environment_context>$/.test(getMessageText(record).trim());
+  const contentItemKinds = record.value?.payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+  if (Array.isArray(contentItemKinds) && contentItemKinds.length
+    && contentItemKinds.every(kind => kind === "agents_md.instructions" || kind === "environments.environment_context")) {
+    return true;
+  }
+  const withoutContext = getMessageText(record)
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>/gi, " ")
+    .replace(/^# AGENTS\.md instructions[\s\S]*?<\/INSTRUCTIONS>/i, " ")
+    .trim();
+  return !withoutContext;
 }
 
 function isMessageLikeRecord(record) {
@@ -3594,10 +3605,10 @@ function normalizeDuplicateUserText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function getSteerParentTurnIds(records) {
-  const parentByTurnId = new Map();
+function getSteerParentUserRecords(records) {
+  const parentByUserRecord = new Map();
   const finalizedTurnIds = new Set();
-  let previousUserTurnId = null;
+  let previousUserRecord = null;
   for (const record of records) {
     if (isFinalAnswerRecord(record)) {
       const finalTurnId = getTurnId(record);
@@ -3610,19 +3621,30 @@ function getSteerParentTurnIds(records) {
       continue;
     }
     const turnId = getTurnId(record);
-    if (!turnId || turnId === previousUserTurnId) {
-      continue;
+    const previousTurnId = getTurnId(previousUserRecord);
+    if (previousUserRecord && turnId && previousTurnId
+      && (turnId === previousTurnId || !finalizedTurnIds.has(previousTurnId))) {
+      parentByUserRecord.set(record, previousUserRecord);
     }
-    if (previousUserTurnId && !finalizedTurnIds.has(previousUserTurnId)) {
-      parentByTurnId.set(turnId, previousUserTurnId);
+    previousUserRecord = record;
+  }
+  return parentByUserRecord;
+}
+
+function getSteerParentTurnIds(records) {
+  const parentByTurnId = new Map();
+  for (const [steerRecord, parentRecord] of getSteerParentUserRecords(records)) {
+    const steerTurnId = getTurnId(steerRecord);
+    const parentTurnId = getTurnId(parentRecord);
+    if (steerTurnId && parentTurnId && steerTurnId !== parentTurnId) {
+      parentByTurnId.set(steerTurnId, parentTurnId);
     }
-    previousUserTurnId = turnId;
   }
   return parentByTurnId;
 }
 
 function buildGroups(records) {
-  const steerParentTurnIds = getSteerParentTurnIds(records);
+  const steerParentUserRecords = getSteerParentUserRecords(records);
   const groups = [];
   let current = {
     id: "preamble",
@@ -3637,9 +3659,13 @@ function buildGroups(records) {
   for (const record of records) {
     if (isUserMessageRecord(record)) {
       const text = normalizeDuplicateUserText(getMessageText(record));
+      const currentUserRecord = current.records.find(isUserMessageRecord);
+      const messageId = record.value?.payload?.id;
+      const currentMessageId = currentUserRecord?.value?.payload?.id;
       const isDuplicateUserRecord = !current.isPreamble
         && text
         && normalizeDuplicateUserText(current.userText) === text
+        && (!messageId || !currentMessageId || messageId === currentMessageId)
         && current.records.length <= 4;
       if (isDuplicateUserRecord) {
         continue;
@@ -3667,6 +3693,7 @@ function buildGroups(records) {
   }
 
   const groupByTurnId = new Map();
+  const groupByUserRecord = new Map();
   for (const group of groups) {
     group.summaryRecords = [...group.records];
     group.isSteer = false;
@@ -3674,6 +3701,9 @@ function buildGroups(records) {
     group.steerChildren = [];
     const userRecord = group.records.find(isUserMessageRecord);
     const turnId = getTurnId(userRecord);
+    if (userRecord) {
+      groupByUserRecord.set(userRecord, group);
+    }
     if (turnId) {
       groupByTurnId.set(turnId, group);
     }
@@ -3686,9 +3716,9 @@ function buildGroups(records) {
       }
     }
   }
-  for (const [steerTurnId, parentTurnId] of steerParentTurnIds) {
-    const steerGroup = groupByTurnId.get(steerTurnId);
-    const parentGroup = groupByTurnId.get(parentTurnId);
+  for (const [steerRecord, parentRecord] of steerParentUserRecords) {
+    const steerGroup = groupByUserRecord.get(steerRecord);
+    const parentGroup = groupByUserRecord.get(parentRecord);
     if (!steerGroup || !parentGroup || steerGroup === parentGroup) {
       continue;
     }
