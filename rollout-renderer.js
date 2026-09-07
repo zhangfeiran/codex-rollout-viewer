@@ -14,6 +14,7 @@ let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
+let rolloutSearchLocations = new Map();
 const localCompactSummaryRecords = new WeakSet();
 const localCompactSummaryByRecord = new WeakMap();
 
@@ -2843,6 +2844,106 @@ function createRenderableRecords(records) {
   return combineToolCallRecords(filteredRecords);
 }
 
+export const ROLLOUT_SEARCH_CATEGORIES = [
+  { id: "user", label: "User messages" },
+  { id: "assistant", label: "Assistant messages" },
+  { id: "reasoning", label: "Reasoning" },
+  { id: "tool_input", label: "Tool inputs" },
+  { id: "tool_output", label: "Tool outputs / file changes" },
+  { id: "system", label: "System / context / other events" }
+];
+
+// Search the complete source text, including content omitted or truncated by the renderer.
+function getRolloutSearchText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(getRolloutSearchText).filter(Boolean).join("\n");
+  if (typeof value !== "object") return String(value);
+  if (/^(?:input_|output_)?(?:image|audio|video)/.test(value.type || "")) return "";
+  for (const key of ["text", "input_text", "output_text"]) {
+    if (typeof value[key] === "string") return value[key];
+  }
+  return Object.entries(value)
+    .filter(([key]) => !["encrypted_content", "image_url"].includes(key))
+    .map(([key, content]) => `${key}: ${getRolloutSearchText(content)}`).join("\n");
+}
+
+export function createRolloutSearchEntries(records) {
+  const normalized = normalizeCompletedAgentMessageTurnIds(records.map(normalizeFileChangeRecord));
+  markLocalCompactSummaryRecords(normalized);
+  const mirrored = getMirroredEventMessages(normalized);
+  const bestMessages = new Map();
+  const toolNames = new Map();
+  for (const record of normalized) {
+    const payload = record.value?.payload || {};
+    if (isFunctionCallPayloadType(payload.type) && payload.call_id) toolNames.set(payload.call_id, payload.name);
+    const key = getMessageDedupKey(record);
+    if (key && !mirrored.has(record)) {
+      const current = bestMessages.get(key);
+      if (!current || getRecordPriority(record) > getRecordPriority(current)) bestMessages.set(key, record);
+    }
+  }
+  const entries = [];
+  for (const record of normalized) {
+    const value = record.value || {};
+    const payload = value.payload || {};
+    const type = getPayloadType(record);
+    const key = getMessageDedupKey(record);
+    if (mirrored.has(record) || (key && bestMessages.get(key) !== record)) continue;
+    let category = "system";
+    let label = type;
+    let text = "";
+    if (isMessageLikeRecord(record)) {
+      const role = getCanonicalMessageRole(record);
+      category = ["user", "assistant"].includes(role) ? role : role === "tool" ? "tool_output" : "system";
+      if (isContextOnlyUserMessageRecord(record) || isLocalCompactSummaryRecord(record)) category = "system";
+      if (payload.channel === "analysis") category = "reasoning";
+      text = getRolloutSearchText(payload.content ?? payload.message ?? payload.text ?? payload.output_text ?? payload.input_text);
+      label = `${role} message${payload.phase ? ` (${payload.phase})` : ""}`;
+    } else if (type === "reasoning" || type === "agent_reasoning") {
+      category = "reasoning";
+      text = getRolloutSearchText([payload.summary, payload.text, payload.content]);
+    } else if (isFunctionCallPayloadType(type)) {
+      category = "tool_input";
+      label = payload.name || "Tool input";
+      const input = payload.arguments ?? payload.input ?? "";
+      text = `${label}\n${getRolloutSearchText(parseArguments(input))}`;
+    } else if (isFunctionOutputPayloadType(type)) {
+      category = "tool_output";
+      label = `${toolNames.get(payload.call_id) || "Tool"} output`;
+      text = getRolloutSearchText(parseArguments(payload.output));
+    } else if (type === "exec_command_begin") {
+      category = "tool_input";
+      text = getRolloutSearchText(payload);
+    } else {
+      if (["exec_command_end", "patch_apply_end"].includes(type)) category = "tool_output";
+      text = getRolloutSearchText(value.payload ?? value);
+    }
+    if (text.trim()) entries.push({ line: record.line, category, label, text });
+  }
+  return entries;
+}
+
+export function* findRolloutSearchMatches(entries, query, categories = ["user", "assistant"]) {
+  const needle = String(query || "").trim();
+  if (!needle || !categories.length) return;
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
+  const selected = new Set(categories);
+  for (const entry of entries) {
+    if (!selected.has(entry.category)) continue;
+    const match = pattern.exec(entry.text);
+    if (!match) continue;
+    const start = Math.max(0, match.index - 85);
+    const end = Math.min(entry.text.length, match.index + match[0].length + 150);
+    yield {
+      line: entry.line, category: entry.category, label: entry.label, offset: match.index,
+      before: `${start ? "…" : ""}${entry.text.slice(start, match.index)}`,
+      match: match[0],
+      after: `${entry.text.slice(match.index + match[0].length, end)}${end < entry.text.length ? "…" : ""}`
+    };
+  }
+}
+
 function getCompactText(value) {
   return String(value ?? "")
     .replace(/<[^>]+>/g, " ")
@@ -4610,6 +4711,23 @@ function renderDocument(records, errors, options = {}) {
     }
   }
   const groups = buildGroups(records);
+  rolloutSearchLocations = new Map();
+  for (const group of groups) {
+    for (const record of group.records) {
+      const location = { groupId: group.id, recordId: `record-${record.line}` };
+      rolloutSearchLocations.set(record.line, location);
+      const attached = [record.toolGroup?.outputRecord, ...(record.toolGroup?.eventRecords || [])];
+      for (const child of attached.filter(Boolean)) rolloutSearchLocations.set(child.line, location);
+    }
+  }
+  for (const group of groups) {
+    const finalAnswer = buildGroupFinalAnswer(group);
+    if (finalAnswer) {
+      for (const record of finalAnswer.records) {
+        rolloutSearchLocations.set(record.line, { groupId: finalAnswer.id, recordId: `record-${record.line}` });
+      }
+    }
+  }
   const context = {
     callById
   };
@@ -4716,6 +4834,35 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
     }
   };
   schedule(renderChunk);
+}
+
+export function revealRolloutSearchResult(line) {
+  document.querySelectorAll(".standalone-search-target").forEach(node => node.classList.remove("standalone-search-target"));
+  const location = rolloutSearchLocations.get(line);
+  if (!location) return false;
+  const turn = document.getElementById(location.groupId);
+  if (turn instanceof HTMLDetailsElement) {
+    turn.open = true;
+    renderLazyTurn(turn);
+  }
+  const target = document.getElementById(location.recordId);
+  if (!target) return false;
+  const opened = [];
+  const open = node => {
+    if (!(node instanceof HTMLDetailsElement)) return;
+    node.open = true;
+    if (node.dataset.rolloutStateKey) opened.push(node.dataset.rolloutStateKey);
+  };
+  for (let node = target.parentElement; node; node = node.parentElement) open(node);
+  target.querySelectorAll("details").forEach(open);
+  renderOpenLazyRolloutDetails();
+  target.classList.add("standalone-search-target");
+  document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", { detail: { stateKeys: opened } }));
+  target.scrollIntoView({ block: "start" });
+  requestAnimationFrame(() => {
+    if (target.isConnected) target.scrollIntoView({ block: "start" });
+  });
+  return true;
 }
 
 function setRolloutDirectoryLevel(mode) {

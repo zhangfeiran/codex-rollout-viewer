@@ -14,6 +14,10 @@ The session bar tracks multiple rollout files in one viewer. Opening another rol
 
 The session bar is the recommended way to track multiple rollouts and replaces separate path-level viewer copies.
 
+Search is available on all three views: `Sessions folders` searches every remembered folder with read permission; a folder page searches its rollouts (respecting the selected CWD); a rollout page searches that file. Use the search box or the session bar's `Search` button. Searches match literal text without case sensitivity, including collapsed content, and show highlighted excerpts with source filenames and line numbers. Click a result to open its rollout and expand the matching record; records omitted from the normal view can be read as source text. Results are paginated in groups of 40.
+
+Only `User messages` and `Assistant messages` are selected by default. You can also include reasoning, tool inputs, tool outputs/file changes, and system/context/other events. Each view remembers its query and selections within the current browser window. File scans show progress and report missing folder permissions or unreadable files. Search text is cached only in memory, and changed files are read again on the next search.
+
 ## Local HTML
 
 For local/offline use, open `codex-rollout-viewer.html` in Chrome.

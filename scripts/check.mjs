@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import vm from "node:vm";
+import { checkContentSearch } from "./check-search.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -182,14 +183,17 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /renderActiveWorkspaceView\(\{ requestPermission: true \}\)/, "clicking a persisted rollout tab must be able to restore file-system permission");
   assert.match(bootScript, /function scrollToDocumentStartSoon\(\) \{[\s\S]*?activeWorkspaceViewKind === "folders" \|\| activeWorkspaceViewKind === "index"/, "sessions pages must guard their delayed scroll-to-top callbacks by view kind");
   assert.match(bootScript, /function scrollToDocumentEndSoon\(\) \{[\s\S]*?activeWorkspaceViewKind === "rollout"/, "scroll-to-bottom callbacks must be limited to rollout detail views");
-  assert.match(bootScript, /async function renderDirectorySelectionPage\(notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*scrollToDocumentStartSoon\(\);/, "the sessions-folders page must scroll to the top after rendering");
-  assert.match(bootScript, /function renderRolloutIndex\(items, label, notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*scrollToDocumentStartSoon\(\);/, "session rollout indexes must scroll to the newest rows at the top after rendering");
+  assert.match(bootScript, /async function renderDirectorySelectionPage\(notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*installContentSearch\(\);\s*scrollToDocumentStartSoon\(\);/, "the sessions-folders page must install search and scroll to the top after rendering");
+  assert.match(bootScript, /function renderRolloutIndex\(items, label, notice = ""\) \{[\s\S]*?installWorkspaceBar\(\);\s*installContentSearch\(\);\s*scrollToDocumentStartSoon\(\);/, "session rollout indexes must install search and scroll to the newest rows at the top after rendering");
   assert.equal((bootScript.match(/scrollToDocumentEndSoon\(\);/g) || []).length, 2, "only rollout rendering and rollout-state restoration may request scrolling to the bottom");
   const scrollFunctionsMatch = bootScript.match(/(function scrollDocumentSoon\(getTop, isCurrentView\) \{[\s\S]*?function scrollToDocumentEndSoon\(\) \{[\s\S]*?\n    \})\n\n    function captureRenderedUiState/);
   assert.ok(scrollFunctionsMatch, "workspace scroll helpers must remain testable");
   const scrollCalls = [];
   const scrollContext = {
     activeWorkspaceViewKind: "folders",
+    searchNavigationPending: false,
+    currentContentSearch: null,
+    contentSearchNavigationVersion: 0,
     document: { body: { scrollHeight: 120 }, documentElement: { scrollHeight: 200 } },
     window: { scrollTo(options) { scrollCalls.push(options.top); } },
     requestAnimationFrame(callback) { callback(); },
@@ -951,5 +955,6 @@ for (const file of files) {
 
 await checkLocalHtml("codex-rollout-viewer.html");
 await checkMarkdownRendering();
+await checkContentSearch();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

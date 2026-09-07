@@ -504,6 +504,125 @@
       margin: 0;
       color: var(--standalone-subtle);
     }
+
+    .standalone-search {
+      min-width: 0;
+      margin: 0 0 14px;
+      padding: 10px;
+      border: 1px solid var(--standalone-border);
+      border-radius: 7px;
+      background: var(--standalone-panel);
+      scroll-margin-top: 100px;
+      font-size: 12px;
+    }
+
+    .standalone-search-row,
+    .standalone-search-types,
+    .standalone-search-pages {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .standalone-search-row input {
+      flex: 1 1 200px;
+      min-width: 0;
+      padding: 7px 9px;
+      color: var(--standalone-fg);
+      background: var(--standalone-bg);
+      border: 1px solid var(--standalone-border);
+      border-radius: 5px;
+      font: inherit;
+    }
+
+    .standalone-search-types {
+      margin: 8px 0 0;
+      padding: 0;
+      border: 0;
+      color: var(--standalone-muted);
+      gap: 5px 14px;
+    }
+
+    .standalone-search-types legend {
+      float: left;
+      margin-right: 12px;
+    }
+
+    .standalone-search-types label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+
+    .standalone-search-types input {
+      margin: 0;
+      accent-color: var(--standalone-blue);
+    }
+
+    .standalone-search-status {
+      margin: 7px 0 0;
+      color: var(--standalone-muted);
+      overflow-wrap: anywhere;
+    }
+
+    .standalone-search-results {
+      max-height: 420px;
+      overflow: auto;
+      scrollbar-width: thin;
+    }
+
+    .standalone-search-result {
+      display: block;
+      width: 100%;
+      padding: 8px 2px;
+      color: var(--standalone-fg);
+      background: transparent;
+      border: 0;
+      border-top: 1px solid var(--standalone-border);
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+
+    .standalone-search-result:hover,
+    .standalone-search-result:focus-visible {
+      background: var(--standalone-panel-strong);
+    }
+
+    .standalone-search-result-meta {
+      display: block;
+      color: var(--standalone-blue);
+      font-size: 11px;
+    }
+
+    .standalone-search mark {
+      padding: 0;
+      color: #ffdf79;
+      background: #69551b;
+    }
+
+    .standalone-search-pages:not(:empty) {
+      margin-top: 8px;
+    }
+
+    .standalone-search-preview {
+      margin-top: 8px;
+    }
+
+    .standalone-search-preview pre {
+      max-height: 450px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .standalone-search-target {
+      outline: 2px solid var(--standalone-blue);
+      scroll-margin-top: 100px;
+    }
   </style>
 </head>
 <body>
@@ -533,6 +652,7 @@ let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
+let rolloutSearchLocations = new Map();
 const localCompactSummaryRecords = new WeakSet();
 const localCompactSummaryByRecord = new WeakMap();
 
@@ -3362,6 +3482,106 @@ function createRenderableRecords(records) {
   return combineToolCallRecords(filteredRecords);
 }
 
+export const ROLLOUT_SEARCH_CATEGORIES = [
+  { id: "user", label: "User messages" },
+  { id: "assistant", label: "Assistant messages" },
+  { id: "reasoning", label: "Reasoning" },
+  { id: "tool_input", label: "Tool inputs" },
+  { id: "tool_output", label: "Tool outputs / file changes" },
+  { id: "system", label: "System / context / other events" }
+];
+
+// Search the complete source text, including content omitted or truncated by the renderer.
+function getRolloutSearchText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(getRolloutSearchText).filter(Boolean).join("\n");
+  if (typeof value !== "object") return String(value);
+  if (/^(?:input_|output_)?(?:image|audio|video)/.test(value.type || "")) return "";
+  for (const key of ["text", "input_text", "output_text"]) {
+    if (typeof value[key] === "string") return value[key];
+  }
+  return Object.entries(value)
+    .filter(([key]) => !["encrypted_content", "image_url"].includes(key))
+    .map(([key, content]) => `${key}: ${getRolloutSearchText(content)}`).join("\n");
+}
+
+export function createRolloutSearchEntries(records) {
+  const normalized = normalizeCompletedAgentMessageTurnIds(records.map(normalizeFileChangeRecord));
+  markLocalCompactSummaryRecords(normalized);
+  const mirrored = getMirroredEventMessages(normalized);
+  const bestMessages = new Map();
+  const toolNames = new Map();
+  for (const record of normalized) {
+    const payload = record.value?.payload || {};
+    if (isFunctionCallPayloadType(payload.type) && payload.call_id) toolNames.set(payload.call_id, payload.name);
+    const key = getMessageDedupKey(record);
+    if (key && !mirrored.has(record)) {
+      const current = bestMessages.get(key);
+      if (!current || getRecordPriority(record) > getRecordPriority(current)) bestMessages.set(key, record);
+    }
+  }
+  const entries = [];
+  for (const record of normalized) {
+    const value = record.value || {};
+    const payload = value.payload || {};
+    const type = getPayloadType(record);
+    const key = getMessageDedupKey(record);
+    if (mirrored.has(record) || (key && bestMessages.get(key) !== record)) continue;
+    let category = "system";
+    let label = type;
+    let text = "";
+    if (isMessageLikeRecord(record)) {
+      const role = getCanonicalMessageRole(record);
+      category = ["user", "assistant"].includes(role) ? role : role === "tool" ? "tool_output" : "system";
+      if (isContextOnlyUserMessageRecord(record) || isLocalCompactSummaryRecord(record)) category = "system";
+      if (payload.channel === "analysis") category = "reasoning";
+      text = getRolloutSearchText(payload.content ?? payload.message ?? payload.text ?? payload.output_text ?? payload.input_text);
+      label = `${role} message${payload.phase ? ` (${payload.phase})` : ""}`;
+    } else if (type === "reasoning" || type === "agent_reasoning") {
+      category = "reasoning";
+      text = getRolloutSearchText([payload.summary, payload.text, payload.content]);
+    } else if (isFunctionCallPayloadType(type)) {
+      category = "tool_input";
+      label = payload.name || "Tool input";
+      const input = payload.arguments ?? payload.input ?? "";
+      text = `${label}\n${getRolloutSearchText(parseArguments(input))}`;
+    } else if (isFunctionOutputPayloadType(type)) {
+      category = "tool_output";
+      label = `${toolNames.get(payload.call_id) || "Tool"} output`;
+      text = getRolloutSearchText(parseArguments(payload.output));
+    } else if (type === "exec_command_begin") {
+      category = "tool_input";
+      text = getRolloutSearchText(payload);
+    } else {
+      if (["exec_command_end", "patch_apply_end"].includes(type)) category = "tool_output";
+      text = getRolloutSearchText(value.payload ?? value);
+    }
+    if (text.trim()) entries.push({ line: record.line, category, label, text });
+  }
+  return entries;
+}
+
+export function* findRolloutSearchMatches(entries, query, categories = ["user", "assistant"]) {
+  const needle = String(query || "").trim();
+  if (!needle || !categories.length) return;
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
+  const selected = new Set(categories);
+  for (const entry of entries) {
+    if (!selected.has(entry.category)) continue;
+    const match = pattern.exec(entry.text);
+    if (!match) continue;
+    const start = Math.max(0, match.index - 85);
+    const end = Math.min(entry.text.length, match.index + match[0].length + 150);
+    yield {
+      line: entry.line, category: entry.category, label: entry.label, offset: match.index,
+      before: `${start ? "…" : ""}${entry.text.slice(start, match.index)}`,
+      match: match[0],
+      after: `${entry.text.slice(match.index + match[0].length, end)}${end < entry.text.length ? "…" : ""}`
+    };
+  }
+}
+
 function getCompactText(value) {
   return String(value ?? "")
     .replace(/<[^>]+>/g, " ")
@@ -5129,6 +5349,23 @@ function renderDocument(records, errors, options = {}) {
     }
   }
   const groups = buildGroups(records);
+  rolloutSearchLocations = new Map();
+  for (const group of groups) {
+    for (const record of group.records) {
+      const location = { groupId: group.id, recordId: `record-${record.line}` };
+      rolloutSearchLocations.set(record.line, location);
+      const attached = [record.toolGroup?.outputRecord, ...(record.toolGroup?.eventRecords || [])];
+      for (const child of attached.filter(Boolean)) rolloutSearchLocations.set(child.line, location);
+    }
+  }
+  for (const group of groups) {
+    const finalAnswer = buildGroupFinalAnswer(group);
+    if (finalAnswer) {
+      for (const record of finalAnswer.records) {
+        rolloutSearchLocations.set(record.line, { groupId: finalAnswer.id, recordId: `record-${record.line}` });
+      }
+    }
+  }
   const context = {
     callById
   };
@@ -5235,6 +5472,35 @@ function renderOpenLazyRolloutDetails(defer = false, kind = "all") {
     }
   };
   schedule(renderChunk);
+}
+
+export function revealRolloutSearchResult(line) {
+  document.querySelectorAll(".standalone-search-target").forEach(node => node.classList.remove("standalone-search-target"));
+  const location = rolloutSearchLocations.get(line);
+  if (!location) return false;
+  const turn = document.getElementById(location.groupId);
+  if (turn instanceof HTMLDetailsElement) {
+    turn.open = true;
+    renderLazyTurn(turn);
+  }
+  const target = document.getElementById(location.recordId);
+  if (!target) return false;
+  const opened = [];
+  const open = node => {
+    if (!(node instanceof HTMLDetailsElement)) return;
+    node.open = true;
+    if (node.dataset.rolloutStateKey) opened.push(node.dataset.rolloutStateKey);
+  };
+  for (let node = target.parentElement; node; node = node.parentElement) open(node);
+  target.querySelectorAll("details").forEach(open);
+  renderOpenLazyRolloutDetails();
+  target.classList.add("standalone-search-target");
+  document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", { detail: { stateKeys: opened } }));
+  target.scrollIntoView({ block: "start" });
+  requestAnimationFrame(() => {
+    if (target.isConnected) target.scrollIntoView({ block: "start" });
+  });
+  return true;
 }
 
 function setRolloutDirectoryLevel(mode) {
@@ -5673,6 +5939,14 @@ export async function renderLocalCodexRolloutDocument() {
     const WORKSPACE_NAVIGATION_KEY = createScopedStorageKey("workspace-navigation-v1");
     const DEFAULT_WORKSPACE_SLOT_ID = "default";
     const AUTO_REFRESH_INTERVALS = [0, 2000, 5000, 10000, 30000];
+    const CONTENT_SEARCH_STATE_KEY = createScopedStorageKey("content-search-v1");
+    const contentSearchCache = new Map();
+    const contentSearchStates = new Map();
+    let contentSearchCacheSize = 0;
+    let currentContentSearch = null;
+    let currentRolloutSearchDocument = null;
+    let searchNavigationPending = false;
+    let contentSearchNavigationVersion = 0;
 
     let savedDirectoryEntries = [];
     let openDirectoryTabIds = new Set();
@@ -5697,6 +5971,307 @@ export async function renderLocalCodexRolloutDocument() {
     };
     let indexCwdFilter = "";
     let indexCwdSort = "modified";
+
+    function getContentSearchScope() {
+      if (activeWorkspaceViewKind === "rollout") {
+        return { key: `rollout:${activeWorkspaceSlotId}`, label: "this rollout", sources: currentRenderedSource ? [{ source: currentRenderedSource, title: getWorkspaceSlot()?.label }] : [] };
+      }
+      if (activeWorkspaceViewKind === "index") {
+        return {
+          key: `index:${selectedDirectoryEntry?.id || currentIndexLabel}`,
+          label: `this sessions folder${indexCwdFilter ? " (selected CWD)" : ""}`,
+          sources: getFilteredIndexItems(rolloutIndex).map(item => ({ source: item.source, title: item.title }))
+        };
+      }
+      return { key: "folders", label: "all remembered sessions folders", directories: [...savedDirectoryEntries] };
+    }
+
+    function getContentSearchState(key) {
+      if (!contentSearchStates.has(key)) {
+        let saved = null;
+        try { saved = JSON.parse(sessionStorage.getItem(CONTENT_SEARCH_STATE_KEY) || "{}")[key]; } catch {}
+        contentSearchStates.set(key, {
+          query: typeof saved?.query === "string" ? saved.query : "",
+          categories: Array.isArray(saved?.categories)
+            ? saved.categories.filter(id => ROLLOUT_SEARCH_CATEGORIES.some(category => category.id === id))
+            : ["user", "assistant"]
+        });
+      }
+      return contentSearchStates.get(key);
+    }
+
+    function saveContentSearchState(key, state) {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(CONTENT_SEARCH_STATE_KEY) || "{}");
+        saved[key] = { query: state.query, categories: state.categories };
+        sessionStorage.setItem(CONTENT_SEARCH_STATE_KEY, JSON.stringify(saved));
+      } catch {}
+    }
+
+    async function getContentSearchDocument(source) {
+      const metadata = await getSourceMetadata(source);
+      const key = source.directoryId ? getSourceStateId(source) : source.fileHandle || source;
+      const cached = contentSearchCache.get(key);
+      if (cached && Number.isFinite(metadata.size) && Number.isFinite(metadata.lastModified)
+        && cached.size === metadata.size && cached.lastModified === metadata.lastModified) {
+        contentSearchCache.delete(key);
+        contentSearchCache.set(key, cached);
+        return cached;
+      }
+      const current = currentRolloutSearchDocument;
+      const parsed = current && current.source === source
+        && current.metadata.size === metadata.size && current.metadata.lastModified === metadata.lastModified
+        ? current.parsed : parseCodexRolloutJsonl(await source.getText());
+      if (!isCodexRolloutRecords(parsed.records)) return null;
+      const entries = createRolloutSearchEntries(parsed.records);
+      const result = {
+        ...metadata, entries,
+        title: getFirstUserTitle(parsed.records, source.name),
+        parseErrors: parsed.errors.length,
+        characters: entries.reduce((total, entry) => total + entry.text.length, 0)
+      };
+      if (cached) {
+        contentSearchCache.delete(key);
+        contentSearchCacheSize -= cached.characters;
+      }
+      // Keep a bounded in-memory cache; never persist full search text to browser storage.
+      if (result.characters <= 16000000) {
+        contentSearchCache.set(key, result);
+        contentSearchCacheSize += result.characters;
+      }
+      while (contentSearchCacheSize > 16000000 || contentSearchCache.size > 64) {
+        const oldest = contentSearchCache.keys().next().value;
+        contentSearchCacheSize -= contentSearchCache.get(oldest).characters;
+        contentSearchCache.delete(oldest);
+      }
+      return result;
+    }
+
+    function isContentSearchCurrent(search, run) {
+      return currentContentSearch === search && search.root.isConnected && search.run === run
+        && search.scope.key === getContentSearchScope().key;
+    }
+
+    async function* getContentSearchSources(scope, report, isCurrent) {
+      if (scope.sources) {
+        yield* scope.sources;
+        return;
+      }
+      for (const directory of scope.directories) {
+        if (!isCurrent()) return;
+        if (!directory.handle || !await hasReadPermission(directory.handle)) {
+          report.blocked.push(directory);
+          continue;
+        }
+        try {
+          for await (const source of walkDirectoryHandle(directory.handle, "", {
+            directoryId: directory.id, directoryLabel: getDirectoryEntryLabel(directory)
+          })) {
+            if (!isCurrent()) return;
+            yield { source };
+          }
+        } catch {
+          report.failedFolders.push(getDirectoryEntryLabel(directory));
+        }
+      }
+    }
+
+    function renderContentSearchResults(search) {
+      const pageSize = 40;
+      const pageCount = Math.ceil(search.results.length / pageSize);
+      search.page = Math.min(search.page, Math.max(0, pageCount - 1));
+      const start = search.page * pageSize;
+      search.root.querySelector("[data-search-results]").innerHTML = search.results.slice(start, start + pageSize).map((result, index) => `
+        <button type="button" class="standalone-search-result" data-search-result="${start + index}">
+          <span class="standalone-search-result-meta">${escapeHtml([result.source.directoryLabel, result.title || result.source.name, result.source.path, result.label, `line ${result.line}`].filter(Boolean).join(" · "))}</span>
+          <span>${escapeHtml(result.before)}<mark>${escapeHtml(result.match)}</mark>${escapeHtml(result.after)}</span>
+        </button>
+      `).join("");
+      search.root.querySelector("[data-search-pages]").innerHTML = pageCount > 1 ? `
+        <button type="button" class="standalone-workspace-action" data-search-page="-1" ${search.page ? "" : "disabled"}>Previous</button>
+        <span>${search.page + 1} / ${pageCount}</span>
+        <button type="button" class="standalone-workspace-action" data-search-page="1" ${search.page + 1 < pageCount ? "" : "disabled"}>Next</button>
+      ` : "";
+    }
+
+    async function runContentSearch(search) {
+      clearTimeout(search.timer);
+      const run = ++search.run;
+      const isCurrent = () => isContentSearchCurrent(search, run);
+      if (!isCurrent()) return;
+      search.results = [];
+      search.page = 0;
+      search.root.querySelector("[data-search-preview]").replaceChildren();
+      const status = search.root.querySelector("[data-search-status]");
+      const permissions = search.root.querySelector("[data-search-permissions]");
+      permissions.replaceChildren();
+      renderContentSearchResults(search);
+      const query = search.state.query.trim();
+      const categories = [...search.state.categories];
+      if (!query || !categories.length) {
+        status.textContent = !categories.length ? "Select at least one content type." : `Search ${search.scope.label}. Enter text to find matching records.`;
+        search.root.removeAttribute("aria-busy");
+        return;
+      }
+      search.root.setAttribute("aria-busy", "true");
+      const report = { blocked: [], failedFolders: [], unreadable: 0, parseErrors: 0 };
+      const matchedFiles = new Set();
+      let scanned = 0;
+      let lastPaint = 0;
+      status.textContent = "Searching…";
+      try {
+        for await (const item of getContentSearchSources(search.scope, report, isCurrent)) {
+          if (!isCurrent()) return;
+          try {
+            const file = await getContentSearchDocument(item.source);
+            if (!isCurrent()) return;
+            scanned += 1;
+            if (file) {
+              report.parseErrors += file.parseErrors;
+              for (const match of findRolloutSearchMatches(file.entries, query, categories)) {
+                search.results.push({ ...match, source: item.source, title: item.title || file.title });
+                matchedFiles.add(getSourceStateId(item.source));
+              }
+            }
+          } catch {
+            if (!isCurrent()) return;
+            scanned += 1;
+            report.unreadable += 1;
+          }
+          if (Date.now() - lastPaint > 80) {
+            status.textContent = `Searching… ${formatNumber(scanned)} files scanned, ${formatNumber(search.results.length)} matching records.`;
+            renderContentSearchResults(search);
+            lastPaint = Date.now();
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        }
+        if (!isCurrent()) return;
+        const warnings = [
+          report.blocked.length ? `${report.blocked.length} folders need permission` : "",
+          report.failedFolders.length ? `Could not finish scanning: ${report.failedFolders.join(", ")}` : "",
+          report.unreadable ? `${report.unreadable} unreadable files skipped` : "",
+          report.parseErrors ? `${report.parseErrors} invalid JSONL lines skipped` : ""
+        ].filter(Boolean);
+        status.textContent = `${formatNumber(search.results.length)} matching records in ${formatNumber(matchedFiles.size)} rollouts · ${formatNumber(scanned)} files scanned.${warnings.length ? ` ${warnings.join(". ")}. Results may be incomplete.` : ""}`;
+        permissions.innerHTML = report.blocked.map(directory => `<button type="button" class="standalone-workspace-action" data-search-permission="${escapeAttribute(directory.id)}">Allow reading ${escapeHtml(getDirectoryEntryLabel(directory))}</button>`).join("");
+        renderContentSearchResults(search);
+      } catch (error) {
+        if (isCurrent()) status.textContent = `Search failed: ${error?.message || error}`;
+      } finally {
+        if (isCurrent()) search.root.removeAttribute("aria-busy");
+      }
+    }
+
+    function focusContentSearch() {
+      contentSearchNavigationVersion += 1;
+      const root = document.querySelector("[data-content-search]");
+      root?.scrollIntoView({ block: "start" });
+      root?.querySelector("[data-search-query]")?.focus({ preventScroll: true });
+    }
+
+    async function openContentSearchResult(result) {
+      contentSearchNavigationVersion += 1;
+      searchNavigationPending = true;
+      try {
+        if (activeWorkspaceViewKind !== "rollout" || getSourceStateId(currentRenderedSource) !== getSourceStateId(result.source)) {
+          const navigationVersion = workspaceNavigationVersion;
+          await persistCurrentRenderedUiState();
+          if (navigationVersion !== workspaceNavigationVersion) return;
+          currentRenderedSource = null;
+          currentRenderedUiState = null;
+          await openIndexedRolloutItem({ source: result.source, title: result.title, name: result.source.name });
+        }
+        if (activeWorkspaceViewKind !== "rollout" || getSourceStateId(currentRenderedSource) !== getSourceStateId(result.source)) return;
+        contentSearchNavigationVersion += 1;
+        const revealed = revealRolloutSearchResult(result.line);
+        if (revealed && result.offset < MAX_DISPLAY_TEXT_LENGTH) return;
+        const file = await getContentSearchDocument(currentRenderedSource);
+        if (getSourceStateId(currentRenderedSource) !== getSourceStateId(result.source)) return;
+        const entry = file?.entries.find(candidate => candidate.line === result.line && candidate.category === result.category);
+        const preview = document.querySelector("[data-search-preview]");
+        if (preview && entry) {
+          preview.innerHTML = `<details class="standalone-search-preview" open><summary>${escapeHtml(entry.label)} · line ${entry.line} · Source text</summary><pre></pre></details>`;
+          preview.querySelector("pre").textContent = entry.text;
+          focusContentSearch();
+        }
+      } catch (error) {
+        setStatus(`Could not open search result: ${error?.message || error}`, true);
+      } finally {
+        searchNavigationPending = false;
+      }
+    }
+
+    function installContentSearch() {
+      const host = document.querySelector(".rollout-main, .standalone-index-shell");
+      if (!host) return;
+      if (currentContentSearch) {
+        clearTimeout(currentContentSearch.timer);
+        currentContentSearch.run += 1;
+      }
+      document.querySelector("[data-content-search]")?.remove();
+      const scope = getContentSearchScope();
+      const state = getContentSearchState(scope.key);
+      const root = document.createElement("section");
+      root.className = "standalone-search";
+      root.dataset.contentSearch = "";
+      root.setAttribute("aria-label", `Search ${scope.label}`);
+      root.innerHTML = `
+        <form data-search-form class="standalone-search-row">
+          <input type="search" data-search-query aria-label="Search ${escapeAttribute(scope.label)}" placeholder="Search ${escapeAttribute(scope.label)}…" value="${escapeAttribute(state.query)}" autocomplete="off">
+          <button type="submit" class="standalone-workspace-action">Search</button>
+          <button type="button" class="standalone-workspace-action" data-search-clear>Clear</button>
+        </form>
+        <fieldset class="standalone-search-types"><legend>Include</legend>
+          ${ROLLOUT_SEARCH_CATEGORIES.map(category => `<label><input type="checkbox" data-search-category="${category.id}" ${state.categories.includes(category.id) ? "checked" : ""}>${category.label}</label>`).join("")}
+        </fieldset>
+        <p class="standalone-search-status" data-search-status role="status" aria-live="polite"></p>
+        <div class="standalone-search-pages" data-search-permissions></div>
+        <div class="standalone-search-results" data-search-results></div>
+        <div class="standalone-search-pages" data-search-pages></div>
+        <div data-search-preview></div>
+      `;
+      const header = host.querySelector("header");
+      if (header) header.after(root);
+      else host.prepend(root);
+      const search = { root, scope, state, results: [], page: 0, run: 0, timer: null };
+      currentContentSearch = search;
+      const update = (immediate = false) => {
+        state.query = root.querySelector("[data-search-query]").value;
+        state.categories = [...root.querySelectorAll("[data-search-category]:checked")].map(input => input.dataset.searchCategory);
+        saveContentSearchState(scope.key, state);
+        search.run += 1;
+        clearTimeout(search.timer);
+        if (immediate || !state.query.trim()) runContentSearch(search);
+        else search.timer = setTimeout(() => runContentSearch(search), 300);
+      };
+      root.addEventListener("submit", event => { event.preventDefault(); update(true); });
+      root.addEventListener("input", event => {
+        if (event.target.matches("[data-search-query]") && !event.isComposing) update();
+      });
+      root.addEventListener("compositionend", () => update());
+      root.addEventListener("change", event => {
+        if (event.target.matches("[data-search-category]")) update(true);
+      });
+      root.addEventListener("click", async event => {
+        const result = event.target.closest("[data-search-result]");
+        if (result) {
+          const match = search.results[Number(result.dataset.searchResult)];
+          if (match) await openContentSearchResult(match);
+        } else if (event.target.closest("[data-search-clear]")) {
+          root.querySelector("[data-search-query]").value = "";
+          update(true);
+          focusContentSearch();
+        } else if (event.target.closest("[data-search-page]")) {
+          search.page += Number(event.target.closest("[data-search-page]").dataset.searchPage);
+          renderContentSearchResults(search);
+          root.querySelector("[data-search-results]").scrollTop = 0;
+        } else if (event.target.closest("[data-search-permission]")) {
+          const directory = getDirectoryEntryById(event.target.closest("[data-search-permission]").dataset.searchPermission);
+          if (directory && await requestReadPermission(directory.handle)) update(true);
+        }
+      });
+      runContentSearch(search);
+    }
 
     function getStatusNode() {
       return document.querySelector("[data-status]");
@@ -6020,6 +6595,7 @@ export async function renderLocalCodexRolloutDocument() {
           `).join("")}
         </div>
         <div class="standalone-workspace-actions">
+          <button class="standalone-workspace-action" type="button" data-focus-content-search>Search</button>
           ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index title="Return to the source folder tab">Back to index</button>` : ""}
           <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
           <button class="standalone-workspace-action" type="button" data-refresh-all-workspace-slots ${workspaceSlots.some(slot => slot.sourceId) ? "" : "disabled"}>Refresh all</button>
@@ -6148,6 +6724,7 @@ export async function renderLocalCodexRolloutDocument() {
       updateDefaultPathHint();
       updateSavedDirectoryButtons();
       installWorkspaceBar();
+      installContentSearch();
       scrollToDocumentStartSoon();
     }
 
@@ -7072,6 +7649,7 @@ export async function renderLocalCodexRolloutDocument() {
       `;
       updateDefaultPathHint();
       installWorkspaceBar();
+      installContentSearch();
       scrollToDocumentStartSoon();
     }
 
@@ -7491,8 +8069,9 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function scrollDocumentSoon(getTop, isCurrentView) {
+      const searchVersion = contentSearchNavigationVersion;
       const scroll = () => {
-        if (!isCurrentView()) {
+        if (!isCurrentView() || searchVersion !== contentSearchNavigationVersion) {
           return;
         }
         window.scrollTo({
@@ -7516,6 +8095,8 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function scrollToDocumentEndSoon() {
+      if (searchNavigationPending || (currentContentSearch?.root.isConnected
+        && (currentContentSearch.state.query.trim() || currentContentSearch.root.contains(document.activeElement)))) return;
       scrollDocumentSoon(
         () => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
         () => activeWorkspaceViewKind === "rollout"
@@ -7561,7 +8142,7 @@ export async function renderLocalCodexRolloutDocument() {
           return;
         }
         if (node.dataset.rolloutLevel === "2") {
-          node.open = false;
+          if (!node.querySelector(".standalone-search-target")) node.open = false;
           return;
         }
         const key = node.dataset.rolloutStateKey;
@@ -7607,12 +8188,13 @@ export async function renderLocalCodexRolloutDocument() {
       } finally {
         delete document.documentElement.dataset.rolloutRestoringState;
       }
+      const searchVersion = contentSearchNavigationVersion;
       setTimeout(() => {
         isRestoringRenderedUiState = false;
         document.dispatchEvent(new CustomEvent("codex-rollout-render-open-lazy", {
           detail: { defer: true, kind: "content" }
         }));
-        scrollToDocumentEndSoon();
+        if (searchVersion === contentSearchNavigationVersion) scrollToDocumentEndSoon();
       }, 0);
     }
 
@@ -8169,6 +8751,7 @@ export async function renderLocalCodexRolloutDocument() {
         installWorkspaceBar();
         return false;
       }
+      currentRolloutSearchDocument = { source, metadata, parsed: parsedResult.parsed };
       if (wasRenderingSameSource && parsedResult.appendedBytes === 0) {
         currentRenderedSource = previousRenderedSource;
         currentRenderedUiState = previousRenderedUiState;
@@ -8176,6 +8759,8 @@ export async function renderLocalCodexRolloutDocument() {
         installWorkspaceBar();
         return true;
       }
+      const searchInput = document.activeElement?.matches("[data-search-query]") ? document.activeElement : null;
+      const searchSelection = searchInput ? [searchInput.selectionStart, searchInput.selectionEnd] : null;
       await renderCodexRolloutRecords(parsedResult.parsed, {
         fileName: source.name,
         sourceUrl: source.path || source.name,
@@ -8185,12 +8770,23 @@ export async function renderLocalCodexRolloutDocument() {
       currentRenderedSource = source;
       ensureRenderedUiStatePersistenceInstalled();
       installWorkspaceBar();
+      installContentSearch();
+      if (searchSelection) {
+        const input = document.querySelector("[data-search-query]");
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(...searchSelection);
+        contentSearchNavigationVersion += 1;
+      }
       scrollToDocumentEndSoon();
       return true;
     }
 
     async function renderIndexedRollout(id) {
       const item = rolloutIndex.find(candidate => candidate.id === id);
+      await openIndexedRolloutItem(item);
+    }
+
+    async function openIndexedRolloutItem(item) {
       if (!item) {
         return;
       }
@@ -8381,6 +8977,10 @@ export async function renderLocalCodexRolloutDocument() {
       }
       if (event.target.closest("[data-refresh-workspace-slot]")) {
         await refreshWorkspaceSlot(activeWorkspaceSlotId);
+        return;
+      }
+      if (event.target.closest("[data-focus-content-search]")) {
+        focusContentSearch();
         return;
       }
       if (event.target.closest("[data-refresh-all-workspace-slots]")) {
