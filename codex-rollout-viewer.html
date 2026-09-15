@@ -653,6 +653,7 @@ let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
 let rolloutSearchLocations = new Map();
+let markdownLinkDrive = "";
 const localCompactSummaryRecords = new WeakSet();
 const localCompactSummaryByRecord = new WeakMap();
 
@@ -1989,13 +1990,26 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
-function sanitizeUrl(rawUrl) {
+function normalizeMarkdownLinkDrive(value) {
+  const match = /^([a-z])(?::[\\/]?)?$/i.exec(String(value ?? "").trim());
+  return match ? `${match[1].toUpperCase()}:` : "";
+}
+
+function sanitizeUrl(rawUrl, linkDrive = "") {
   const cleaned = String(rawUrl ?? "").trim().replace(/^<|>$/g, "");
   if (!cleaned) {
     return null;
   }
   try {
-    const parsed = new URL(cleaned, location.href);
+    const drive = normalizeMarkdownLinkDrive(linkDrive);
+    const isLinuxAbsolutePath = /^\/(?![\\/]|[a-z]:(?:[\\/]|$))/i;
+    const target = drive && isLinuxAbsolutePath.test(cleaned)
+      ? `file:///${drive}${cleaned}`
+      : cleaned;
+    const parsed = new URL(target, location.href);
+    if (drive && /^file:\/\/\//i.test(cleaned) && !parsed.host && isLinuxAbsolutePath.test(parsed.pathname)) {
+      parsed.pathname = `/${drive}${parsed.pathname}`;
+    }
     const protocol = parsed.protocol.toLowerCase();
     if (["http:", "https:", "file:"].includes(protocol)) {
       return parsed.href;
@@ -2047,8 +2061,8 @@ function renderInlineMarkdown(value) {
     const titleAttribute = title ? ` title="${escapeAttribute(title)}"` : "";
     return tokenStore.push(`<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}"${titleAttribute}>`);
   });
-  text = text.replace(/\[([^\]]+)\]\((\S+?)(?:\s+["']([^"']+)["'])?\)/g, (_match, label, url, title) => {
-    const href = sanitizeUrl(url);
+  text = text.replace(/\[([^\]]+)\]\((<[^>\n]+>|\S+?)(?:\s+["']([^"']+)["'])?\)/g, (_match, label, url, title) => {
+    const href = sanitizeUrl(url, markdownLinkDrive);
     if (!href) {
       return escapeHtml(label);
     }
@@ -5327,6 +5341,7 @@ function createMeta(name, content) {
 function renderDocument(records, errors, options = {}) {
   lazyRolloutContentStore = new Map();
   rawMessageMarkdownStore = new Map();
+  markdownLinkDrive = normalizeMarkdownLinkDrive(options.markdownLinkDrive);
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
@@ -5866,7 +5881,8 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   renderDocument(records, parsed.errors, {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href,
-    sessionFolderName: options.sessionFolderName
+    sessionFolderName: options.sessionFolderName,
+    markdownLinkDrive: options.markdownLinkDrive
   });
   await enhanceRenderedContent();
   return {
@@ -5882,7 +5898,8 @@ export async function renderCodexRolloutRecords(parsed, options = {}) {
   renderDocument(records, parsed?.errors || [], {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href,
-    sessionFolderName: options.sessionFolderName
+    sessionFolderName: options.sessionFolderName,
+    markdownLinkDrive: options.markdownLinkDrive
   });
   await enhanceRenderedContent();
   return {
@@ -6691,6 +6708,7 @@ export async function renderLocalCodexRolloutDocument() {
                   <tr>
                     <th class="standalone-cell-folder-name">Folder</th>
                     <th>Status</th>
+                    <th>Link drive</th>
                     <th class="standalone-cell-date">Last opened</th>
                     <th class="standalone-cell-date">Added</th>
                     <th>Actions</th>
@@ -6704,6 +6722,9 @@ export async function renderLocalCodexRolloutDocument() {
                         <p class="standalone-folder-subtitle">${escapeHtml(entry.name || "sessions")}</p>
                       </td>
                       <td><span class="standalone-chip">${escapeHtml(entry.permissionLabel)}</span></td>
+                      <td>
+                        <button class="standalone-file-button" type="button" data-edit-directory-link-drive-id="${escapeAttribute(entry.id)}" title="Map Linux Markdown file links to a Windows drive">${escapeHtml(entry.markdownLinkDrive || "Not set")}</button>
+                      </td>
                       <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.usedAt))}</td>
                       <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.addedAt))}</td>
                       <td>
@@ -6857,6 +6878,7 @@ export async function renderLocalCodexRolloutDocument() {
         id: String(entry.id || createDirectoryEntryId()),
         name: entry.name || handle.name || "sessions",
         label: entry.label || handle.name || ".codex/sessions",
+        markdownLinkDrive: normalizeMarkdownLinkDrive(entry.markdownLinkDrive),
         handle,
         addedAt,
         usedAt: Number.isFinite(entry.usedAt) ? entry.usedAt : addedAt
@@ -7012,6 +7034,35 @@ export async function renderLocalCodexRolloutDocument() {
         selectedDirectoryEntry = getDirectoryEntryById(id);
       }
       await renderDirectorySelectionPage("Display path updated.");
+    }
+
+    async function editDirectoryEntryLinkDrive(id) {
+      const entry = getDirectoryEntryById(id);
+      if (!entry) {
+        return;
+      }
+      const value = window.prompt(
+        `Markdown file-link drive for ${getDirectoryEntryLabel(entry)}.\nEnter a drive letter, e.g. X or X:.\n/home/feiran/file.txt → file:///X:/home/feiran/file.txt\nLeave empty to disable mapping.`,
+        entry.markdownLinkDrive || ""
+      );
+      if (value == null) {
+        return;
+      }
+      const drive = normalizeMarkdownLinkDrive(value);
+      if (value.trim() && !drive) {
+        setStatus("Enter a single drive letter, such as X or X:, or leave empty to disable mapping.", true);
+        return;
+      }
+      if (drive === entry.markdownLinkDrive) {
+        return;
+      }
+      await saveDirectoryEntries(savedDirectoryEntries.map(candidate => candidate.id === id
+        ? { ...candidate, markdownLinkDrive: drive }
+        : candidate
+      ));
+      await renderDirectorySelectionPage(drive
+        ? `Markdown file links for ${getDirectoryEntryLabel(entry)} now use ${drive}.`
+        : `Markdown file-link mapping disabled for ${getDirectoryEntryLabel(entry)}.`);
     }
 
     async function getSavedSlotValue(baseKey, scopedLegacyKey, legacyKey, slotId = activeWorkspaceSlotId) {
@@ -8752,7 +8803,8 @@ export async function renderLocalCodexRolloutDocument() {
         return false;
       }
       currentRolloutSearchDocument = { source, metadata, parsed: parsedResult.parsed };
-      if (wasRenderingSameSource && parsedResult.appendedBytes === 0) {
+      const sourceLinkDrive = getDirectoryEntryById(source.directoryId)?.markdownLinkDrive || "";
+      if (wasRenderingSameSource && parsedResult.appendedBytes === 0 && sourceLinkDrive === markdownLinkDrive) {
         currentRenderedSource = previousRenderedSource;
         currentRenderedUiState = previousRenderedUiState;
         ensureRenderedUiStatePersistenceInstalled();
@@ -8764,7 +8816,8 @@ export async function renderLocalCodexRolloutDocument() {
       await renderCodexRolloutRecords(parsedResult.parsed, {
         fileName: source.name,
         sourceUrl: source.path || source.name,
-        sessionFolderName: source.directoryLabel || ""
+        sessionFolderName: source.directoryLabel || "",
+        markdownLinkDrive: sourceLinkDrive
       });
       restoreRenderedUiState(await getSavedCurrentRolloutUiState(slotId), source);
       currentRenderedSource = source;
@@ -9024,6 +9077,11 @@ export async function renderLocalCodexRolloutDocument() {
       const editDirectoryLabelButton = event.target.closest("[data-edit-directory-label-id]");
       if (editDirectoryLabelButton) {
         await editDirectoryEntryLabel(editDirectoryLabelButton.dataset.editDirectoryLabelId);
+        return;
+      }
+      const editDirectoryLinkDriveButton = event.target.closest("[data-edit-directory-link-drive-id]");
+      if (editDirectoryLinkDriveButton) {
+        await editDirectoryEntryLinkDrive(editDirectoryLinkDriveButton.dataset.editDirectoryLinkDriveId);
         return;
       }
       const forgetDirectoryButton = event.target.closest("[data-forget-directory-id]");

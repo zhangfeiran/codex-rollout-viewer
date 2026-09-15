@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import vm from "node:vm";
 import { checkContentSearch } from "./check-search.mjs";
+import { checkFileLinks } from "./check-file-links.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -956,5 +957,6 @@ for (const file of files) {
 await checkLocalHtml("codex-rollout-viewer.html");
 await checkMarkdownRendering();
 await checkContentSearch();
+await checkFileLinks();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

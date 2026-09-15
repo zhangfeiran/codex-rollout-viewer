@@ -24,6 +24,12 @@ For local/offline use, open `codex-rollout-viewer.html` in Chrome.
 
 The local HTML file has the same viewer UI and can read local rollout files after the same browser permission prompts. Markdown content supports GFM-style tables, inline math with `\(...\)` or `$...$`, and display math with `\[...\]` or `$$...$$`. KaTeX and its fonts are vendored locally, so formula rendering also works offline.
 
+### Map Linux file links to a Windows drive
+
+In `Sessions folders`, click a folder's `Link drive` value and enter a drive letter such as `X` or `X:`. The setting is saved separately for each remembered folder. Its Markdown links to `/home/feiran/file.txt` (or `file:///home/feiran/file.txt`) will then point to `file:///X:/home/feiran/file.txt`, for example through an existing SSHFS-Win mount. Leave the value empty to disable mapping. Link labels and copied Markdown retain their original text; web links, relative links, images, and paths that already specify a Windows drive keep their existing behavior.
+
+Use the local HTML entrypoint for opening mapped file links. Chrome can block navigation from the hosted HTTPS page to local `file:` URLs.
+
 ## Development
 
 Stage the GitHub Pages artifact after changing `codex-rollout-viewer.html` or `rollout-renderer.js`:

@@ -15,6 +15,7 @@ let mathRenderAssetsPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
 let rolloutSearchLocations = new Map();
+let markdownLinkDrive = "";
 const localCompactSummaryRecords = new WeakSet();
 const localCompactSummaryByRecord = new WeakMap();
 
@@ -1351,13 +1352,26 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
-function sanitizeUrl(rawUrl) {
+function normalizeMarkdownLinkDrive(value) {
+  const match = /^([a-z])(?::[\\/]?)?$/i.exec(String(value ?? "").trim());
+  return match ? `${match[1].toUpperCase()}:` : "";
+}
+
+function sanitizeUrl(rawUrl, linkDrive = "") {
   const cleaned = String(rawUrl ?? "").trim().replace(/^<|>$/g, "");
   if (!cleaned) {
     return null;
   }
   try {
-    const parsed = new URL(cleaned, location.href);
+    const drive = normalizeMarkdownLinkDrive(linkDrive);
+    const isLinuxAbsolutePath = /^\/(?![\\/]|[a-z]:(?:[\\/]|$))/i;
+    const target = drive && isLinuxAbsolutePath.test(cleaned)
+      ? `file:///${drive}${cleaned}`
+      : cleaned;
+    const parsed = new URL(target, location.href);
+    if (drive && /^file:\/\/\//i.test(cleaned) && !parsed.host && isLinuxAbsolutePath.test(parsed.pathname)) {
+      parsed.pathname = `/${drive}${parsed.pathname}`;
+    }
     const protocol = parsed.protocol.toLowerCase();
     if (["http:", "https:", "file:"].includes(protocol)) {
       return parsed.href;
@@ -1409,8 +1423,8 @@ function renderInlineMarkdown(value) {
     const titleAttribute = title ? ` title="${escapeAttribute(title)}"` : "";
     return tokenStore.push(`<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}"${titleAttribute}>`);
   });
-  text = text.replace(/\[([^\]]+)\]\((\S+?)(?:\s+["']([^"']+)["'])?\)/g, (_match, label, url, title) => {
-    const href = sanitizeUrl(url);
+  text = text.replace(/\[([^\]]+)\]\((<[^>\n]+>|\S+?)(?:\s+["']([^"']+)["'])?\)/g, (_match, label, url, title) => {
+    const href = sanitizeUrl(url, markdownLinkDrive);
     if (!href) {
       return escapeHtml(label);
     }
@@ -4689,6 +4703,7 @@ function createMeta(name, content) {
 function renderDocument(records, errors, options = {}) {
   lazyRolloutContentStore = new Map();
   rawMessageMarkdownStore = new Map();
+  markdownLinkDrive = normalizeMarkdownLinkDrive(options.markdownLinkDrive);
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
@@ -5228,7 +5243,8 @@ export async function renderCodexRolloutJsonlText(jsonl, options = {}) {
   renderDocument(records, parsed.errors, {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href,
-    sessionFolderName: options.sessionFolderName
+    sessionFolderName: options.sessionFolderName,
+    markdownLinkDrive: options.markdownLinkDrive
   });
   await enhanceRenderedContent();
   return {
@@ -5244,7 +5260,8 @@ export async function renderCodexRolloutRecords(parsed, options = {}) {
   renderDocument(records, parsed?.errors || [], {
     fileName: options.fileName,
     sourceUrl: options.sourceUrl || options.fileName || location.href,
-    sessionFolderName: options.sessionFolderName
+    sessionFolderName: options.sessionFolderName,
+    markdownLinkDrive: options.markdownLinkDrive
   });
   await enhanceRenderedContent();
   return {
