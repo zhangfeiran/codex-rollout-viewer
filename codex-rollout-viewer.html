@@ -88,94 +88,148 @@
       font: inherit;
     }
 
+    :root {
+      --workspace-tabs-width: 256px;
+      --workspace-rail-width: 52px;
+    }
+
+    html[data-workspace-ready] body {
+      padding-left: var(--workspace-tabs-width);
+    }
+
+    html[data-workspace-tabs-collapsed="true"] body {
+      padding-left: var(--workspace-rail-width);
+    }
+
     .standalone-workspace-bar {
-      position: sticky;
-      z-index: 30;
-      top: 0;
+      position: fixed;
+      z-index: 40;
+      inset: 0 auto 0 0;
       display: flex;
-      gap: 8px;
-      align-items: center;
-      min-height: 38px;
-      padding: 5px 8px;
-      color: #97a3b0;
-      background: #0b1016;
-      border-bottom: 1px solid #242c36;
+      flex-direction: column;
+      width: var(--workspace-tabs-width);
+      padding: 8px;
+      color: var(--standalone-muted);
+      background: #0f141b;
+      border-right: 1px solid #242c36;
       font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    }
+
+    .standalone-workspace-heading {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 36px;
+      margin-bottom: 10px;
+      white-space: nowrap;
+    }
+
+    .standalone-workspace-brand {
+      color: var(--standalone-fg);
+      font-weight: 650;
+      font-size: 13px;
+    }
+
+    .standalone-workspace-icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+    }
+
+    .standalone-workspace-toggle,
+    .standalone-workspace-add {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 34px;
+      padding: 8px;
+      border: 0;
+      border-radius: 6px;
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      white-space: nowrap;
+    }
+
+    .standalone-workspace-toggle {
+      flex: 0 0 34px;
     }
 
     .standalone-workspace-tabs {
       display: flex;
+      flex-direction: column;
       flex: 1 1 auto;
       gap: 4px;
-      min-width: 0;
-      overflow-x: auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
       scrollbar-width: thin;
+      scrollbar-gutter: stable;
     }
 
-    .standalone-workspace-tab.is-folders,
-    .standalone-workspace-tab.is-folder {
-      border-radius: 8px 8px 3px 3px;
-    }
-
-    .standalone-workspace-tab.is-folder {
-      border-color: var(--folder-accent, #4a78a8);
-    }
-
-    .standalone-workspace-tab.is-folder .standalone-workspace-tab-status {
-      background: var(--folder-accent, #4a78a8);
-    }
-
-    .standalone-workspace-tab.is-folders .standalone-workspace-tab-status {
-      background: #58a6ff;
-    }
-
-    .standalone-workspace-tab.is-rollout {
-      border-radius: 4px;
-    }
-
-    .standalone-workspace-tab.is-rollout .standalone-workspace-tab-status {
-      border-radius: 2px;
-      background: var(--rollout-accent, #9b7bd5);
-    }
-
-    .standalone-workspace-tab.is-rollout.is-folder-rollout,
-    .standalone-workspace-tab.is-rollout.is-folder-rollout.is-active {
-      border-color: var(--rollout-accent, #4a78a8);
+    .standalone-workspace-group-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: 0 0 28px;
+      padding: 8px 8px 2px;
+      font-size: 10px;
+      color: var(--standalone-subtle);
+      text-transform: uppercase;
+      letter-spacing: .06em;
     }
 
     .standalone-workspace-tab {
-      display: inline-flex;
+      position: relative;
+      display: flex;
       flex: 0 0 auto;
       align-items: center;
-      max-width: 280px;
+      min-width: 0;
+      min-height: 36px;
       color: #aeb8c4;
-      background: #10161d;
-      border: 1px solid #303844;
+      background: transparent;
+      border: 1px solid transparent;
       border-radius: 6px;
     }
 
     .standalone-workspace-tab.is-active {
       color: #f0f5fb;
-      background: #17202a;
-      border-color: #4a78a8;
+      background: #222c38;
+      border-color: #344254;
+      box-shadow: 0 1px 3px #0003;
     }
 
-    .standalone-workspace-tab.is-folder.is-active {
-      border-color: var(--folder-accent, #4a78a8);
+    .standalone-workspace-tab.is-active::before {
+      position: absolute;
+      inset: 8px auto 8px -1px;
+      width: 3px;
+      border-radius: 3px;
+      background: var(--folder-accent, var(--rollout-accent, #58a6ff));
+      content: "";
     }
 
-    .standalone-workspace-tab.is-error {
-      border-color: #a75d5d;
+    .standalone-workspace-tab.is-folder .standalone-workspace-tab-icon {
+      color: var(--folder-accent, #4a78a8);
     }
 
-    .standalone-workspace-tab.is-rollout.is-folder-rollout.is-error {
-      border-color: #a75d5d;
+    .standalone-workspace-tab.is-folders .standalone-workspace-tab-icon {
+      color: #58a6ff;
+    }
+
+    .standalone-workspace-tab.is-rollout .standalone-workspace-tab-icon {
+      color: var(--rollout-accent, #9b7bd5);
+    }
+
+    .standalone-workspace-tab.is-rollout .standalone-workspace-tab-status {
+      background: var(--rollout-accent, #9b7bd5);
     }
 
     .standalone-workspace-tab-button,
     .standalone-workspace-tab-close,
     .standalone-workspace-action {
-      min-height: 26px;
+      min-height: 28px;
       color: inherit;
       background: transparent;
       border: 0;
@@ -185,10 +239,18 @@
 
     .standalone-workspace-tab-button {
       display: flex;
-      gap: 6px;
+      flex: 1 1 auto;
+      gap: 10px;
       align-items: center;
       min-width: 0;
-      padding: 3px 8px;
+      padding: 8px 7px;
+      text-align: left;
+    }
+
+    .standalone-workspace-tab-icon {
+      position: relative;
+      display: flex;
+      flex: 0 0 18px;
     }
 
     .standalone-workspace-tab-label {
@@ -198,35 +260,95 @@
     }
 
     .standalone-workspace-tab-status {
-      inline-size: 7px;
-      block-size: 7px;
-      flex: 0 0 auto;
+      display: none;
+      position: absolute;
+      right: -2px;
+      bottom: -2px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: #647181;
+      box-shadow: 0 0 0 2px #0f141b;
     }
 
     .standalone-workspace-tab.has-updates .standalone-workspace-tab-status {
+      display: block;
       background: #5ea6ee;
-      box-shadow: 0 0 0 2px rgba(94, 166, 238, 0.16);
     }
 
     .standalone-workspace-tab.is-refreshing .standalone-workspace-tab-status {
+      display: block;
       background: #d5a94e;
     }
 
     .standalone-workspace-tab.is-error .standalone-workspace-tab-status {
+      display: block;
       background: #df7777;
     }
 
     .standalone-workspace-tab-close {
-      padding: 2px 7px;
-      color: #778391;
-      border-left: 1px solid #303844;
+      flex: 0 0 26px;
+      min-height: 26px;
+      padding: 0;
+      margin-right: 3px;
+      border-radius: 4px;
+      color: #97a3b0;
+      opacity: 0;
+    }
+
+    .standalone-workspace-tab:is(:hover, :focus-within, .is-active) .standalone-workspace-tab-close {
+      opacity: 1;
+    }
+
+    .standalone-workspace-tab:hover,
+    .standalone-workspace-toggle:hover,
+    .standalone-workspace-add:hover,
+    .standalone-workspace-tab-close:hover {
+      background: #263140;
+      color: #f0f5fb;
+    }
+
+    .standalone-workspace-bar button:focus-visible,
+    .standalone-workspace-toolbar :is(button, select):focus-visible {
+      outline: 2px solid var(--standalone-blue);
+      outline-offset: -2px;
+    }
+
+    .standalone-workspace-new {
+      display: grid;
+      flex: 0 0 auto;
+      gap: 4px;
+      padding-top: 8px;
+      margin-top: 8px;
+      border-top: 1px solid #242c36;
+    }
+
+    .standalone-workspace-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 16px;
+      min-height: 48px;
+      padding: 8px 18px;
+      background: #10161d;
+      border-bottom: 1px solid #242c36;
+      font-size: 12px;
+    }
+
+    .standalone-workspace-current {
+      flex: 1 1 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--standalone-fg);
+      font-weight: 650;
     }
 
     .standalone-workspace-actions {
       display: flex;
-      flex: 0 0 auto;
+      flex-wrap: wrap;
       gap: 4px;
       align-items: center;
     }
@@ -242,23 +364,56 @@
       font: inherit;
     }
 
-    .standalone-workspace-action:disabled {
+    .standalone-workspace-action:disabled,
+    .standalone-workspace-auto-refresh:disabled {
       cursor: default;
       opacity: 0.45;
     }
 
     .standalone-workspace-auto-refresh {
-      max-width: 92px;
+      max-width: 100px;
+    }
+
+    html[data-workspace-tabs-collapsed="true"] .standalone-workspace-bar {
+      width: var(--workspace-rail-width);
+    }
+
+    html[data-workspace-tabs-collapsed="true"] .standalone-workspace-bar:is(:hover, :has(:focus-visible)) {
+      width: min(var(--workspace-tabs-width), calc(100vw - 24px));
+      box-shadow: 12px 0 28px #0006;
+    }
+
+    html[data-workspace-tabs-collapsed="true"] .standalone-workspace-bar:not(:hover):not(:has(:focus-visible)) .standalone-workspace-tabs {
+      scrollbar-gutter: auto;
+      scrollbar-width: none;
+    }
+
+    html[data-workspace-tabs-collapsed="true"] .standalone-workspace-bar:not(:hover):not(:has(:focus-visible)) :is(.standalone-workspace-brand, .standalone-workspace-tab-label, .standalone-workspace-tab-close, .standalone-workspace-add span) {
+      display: none;
+    }
+
+    html[data-workspace-tabs-collapsed="true"] .standalone-workspace-bar:not(:hover):not(:has(:focus-visible)) .standalone-workspace-group-label {
+      flex-basis: 8px;
+      height: 8px;
+      padding: 0;
+      margin: 4px 8px;
+      overflow: hidden;
+      color: transparent;
+      border-top: 1px solid #303844;
     }
 
     @media (max-width: 760px) {
-      .standalone-workspace-bar {
-        align-items: stretch;
-        flex-direction: column;
+      html[data-workspace-ready] body {
+        padding-left: var(--workspace-rail-width);
       }
 
-      .standalone-workspace-actions {
-        overflow-x: auto;
+      .standalone-workspace-bar {
+        max-width: calc(100vw - 24px);
+        box-shadow: 12px 0 28px #0006;
+      }
+
+      .standalone-workspace-toolbar {
+        padding: 8px 10px;
       }
     }
 
@@ -661,7 +816,6 @@ const ROLLOUT_CSS = `
 :root {
   color-scheme: dark;
   --wh-rollout-bg: #0b0f14;
-  --wh-rollout-sidebar: #0f141b;
   --wh-rollout-panel: #131922;
   --wh-rollout-panel-strong: #18212c;
   --wh-rollout-panel-soft: #10161d;
@@ -700,20 +854,7 @@ body.codex-rollout-page {
 }
 
 .codex-rollout {
-  display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
   min-height: 100vh;
-}
-
-.rollout-sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  min-width: 0;
-  padding: 12px;
-  overflow: auto;
-  background: var(--wh-rollout-sidebar);
-  border-right: 1px solid var(--wh-rollout-border-muted);
 }
 
 .rollout-main {
@@ -818,23 +959,15 @@ body.codex-rollout-page {
   font-weight: 700;
 }
 
-.rollout-tree-title {
-  margin: 2px 0 8px;
-  color: var(--wh-rollout-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.rollout-tree-actions {
+.rollout-view-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
 .rollout-tool-btn {
-  flex: 1 1 74px;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 24px;
   padding: 3px 7px;
@@ -851,101 +984,6 @@ body.codex-rollout-page {
 .rollout-tool-btn:hover {
   color: var(--wh-rollout-fg);
   background: var(--wh-rollout-panel-strong);
-}
-
-.rollout-tree {
-  display: grid;
-  gap: 4px;
-}
-
-.rollout-tree a,
-.rollout-tree summary {
-  color: var(--wh-rollout-muted);
-  text-decoration: none;
-}
-
-.rollout-tree a {
-  display: block;
-  min-width: 0;
-  padding: 3px 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: 5px;
-}
-
-.codex-rollout.rollout-nav-wrap .rollout-tree a,
-.codex-rollout.rollout-nav-wrap .rollout-nav-label {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.rollout-tree details[data-rollout-level="2"] {
-  margin-left: 8px;
-}
-
-.rollout-tree > details.rollout-steer-nav {
-  margin-left: 14px;
-}
-
-.rollout-tree a:hover {
-  color: var(--wh-rollout-fg);
-  background: var(--wh-rollout-panel-strong);
-  text-decoration: none;
-}
-
-.rollout-tree > .rollout-final-answer-link {
-  width: calc(100% - 14px);
-  margin-left: 14px;
-  color: var(--wh-rollout-green);
-  font-size: 11px;
-}
-
-.rollout-tree details {
-  border-left: 1px solid var(--wh-rollout-border-muted);
-}
-
-.rollout-tree details + details {
-  margin-top: 2px;
-}
-
-.rollout-tree summary {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 2px;
-  padding: 3px 4px;
-  cursor: pointer;
-  list-style: none;
-  border-radius: 5px;
-}
-
-.rollout-tree summary::-webkit-details-marker {
-  display: none;
-}
-
-.rollout-tree summary::before {
-  content: ">";
-  color: var(--wh-rollout-subtle);
-  display: inline-block;
-}
-
-.rollout-tree details[open] > summary::before {
-  transform: rotate(90deg);
-}
-
-.rollout-tree-children {
-  display: grid;
-  gap: 1px;
-  padding-left: 14px;
-}
-
-.rollout-nav-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .rollout-parse-errors {
@@ -1856,20 +1894,6 @@ pre + .rollout-kv,
 .hljs-built_in,
 .hljs-title.class_ {
   color: #d2a8ff;
-}
-
-@media (max-width: 940px) {
-  .codex-rollout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rollout-sidebar {
-    position: static;
-    height: auto;
-    max-height: 40vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--wh-rollout-border-muted);
-  }
 }
 
 @media (max-width: 640px) {
@@ -4617,7 +4641,6 @@ function buildGroupSections(group) {
       currentAssistantSection = {
         id: `assistant-${record.line}`,
         title: getFullTitleText(text),
-        navTitle: summarizeText(text, 100),
         records: [record],
         standalone: false
       };
@@ -4637,7 +4660,6 @@ function buildGroupSections(group) {
           id: `compact-${record.line}`,
           kind: "compact",
           title: isLocalCompact ? "Local compact" : "Context compacted",
-          navTitle: isLocalCompact ? "Local compact" : "Context compacted",
           records: localCompactSummary && groupedLocalCompactSummaries.has(localCompactSummary)
             ? [localCompactSummary, record]
             : [record],
@@ -4659,7 +4681,6 @@ function buildGroupSections(group) {
           id: `post-compact-${record.line}`,
           kind: "activity",
           title: "Post-compact activity",
-          navTitle: "Post-compact activity",
           records: [],
           standalone: false
         };
@@ -4680,7 +4701,6 @@ function buildGroupSections(group) {
           id: `activity-${record.line}`,
           kind: "activity",
           title: "Activity without assistant",
-          navTitle: "Activity without assistant",
           records: [],
           standalone: false
         };
@@ -4736,54 +4756,6 @@ function getGroupFinalAnswerRecord(group) {
     const finalTurnId = getTurnId(record);
     return !userTurnId || !finalTurnId || finalTurnId === userTurnId;
   }) || null;
-}
-
-function renderSidebar(records, groups, errors, callById, options = {}) {
-  const session = getSessionMeta(records);
-  const fileName = options.fileName || getFileName(options.sourceUrl);
-  return `
-    <aside class="rollout-sidebar" aria-label="Rollout outline">
-      <p class="rollout-tree-title">Outline</p>
-      <div class="rollout-tree-actions">
-        <button class="rollout-tool-btn" type="button" title="Collapse to level 0" data-rollout-collapse-level-zero>Collapse L0</button>
-        <button class="rollout-tool-btn" type="button" title="Collapse to level 1" data-rollout-collapse-level-one>Collapse L1</button>
-        <button class="rollout-tool-btn" type="button" title="Expand to level 1" data-rollout-expand-level-one>Expand L1</button>
-        <button class="rollout-tool-btn" type="button" data-rollout-toggle-wrap>Wrap</button>
-      </div>
-      <nav class="rollout-tree">
-        <a href="#rollout-top">${escapeHtml(session?.id || fileName)}</a>
-        ${errors.length ? `<a href="#parse-errors">Parse errors (${formatNumber(errors.length)})</a>` : ""}
-        ${groups.map(group => `${renderSidebarGroup(group, callById)}${renderSidebarFinalAnswer(group)}`).join("")}
-      </nav>
-    </aside>
-  `;
-}
-
-function renderSidebarGroup(group, callById) {
-  const label = group.isPreamble ? "Preamble" : `${group.index}. ${group.title}`;
-  const assistantSections = buildGroupSections(group).filter(section => !section.standalone);
-  const children = assistantSections
-    .map(section => renderSidebarAssistantSection(section, callById))
-    .join("");
-  return `
-    <details${group.isSteer ? ' class="rollout-steer-nav"' : ""} data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
-      <summary><span class="rollout-nav-label">${escapeHtml(label)}</span></summary>
-      <div class="rollout-tree-children">
-        <a href="#${escapeAttribute(group.id)}">${escapeHtml(label)}</a>
-        ${children}
-      </div>
-    </details>
-  `;
-}
-
-function renderSidebarAssistantSection(section, callById) {
-  const title = section.navTitle || section.title;
-  return `<a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>`;
-}
-
-function renderSidebarFinalAnswer(group) {
-  const section = buildGroupFinalAnswer(group);
-  return section ? `<a class="rollout-final-answer-link" href="#${escapeAttribute(section.id)}">${escapeHtml(`${group.index}. ${section.title}`)}</a>` : "";
 }
 
 function renderEntry(record, role, title, body, options = {}) {
@@ -5396,9 +5368,13 @@ function renderDocument(records, errors, options = {}) {
   article.className = "codex-rollout";
   article.dataset.codexRolloutRendered = "true";
   article.innerHTML = `
-    ${renderSidebar(records, groups, errors, callById, { fileName, sourceUrl })}
     <main class="rollout-main">
       ${renderHeader(records, errors, { fileName, sourceUrl, sessionFolderName: options.sessionFolderName })}
+      <div class="rollout-view-controls" role="group" aria-label="Rollout content display">
+        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-rollout-collapse-level-zero>Collapse L0</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-rollout-collapse-level-one>Collapse L1</button>
+        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-rollout-expand-level-one>Expand L1</button>
+      </div>
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
         ${groups.map(group => renderTurnGroupWithFinalAnswer(group, context)).join("")}
@@ -5521,7 +5497,7 @@ export function revealRolloutSearchResult(line) {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
+    document.querySelectorAll(".rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
@@ -5534,47 +5510,6 @@ function setRolloutDirectoryLevel(mode) {
   } finally {
     delete document.documentElement.dataset.rolloutRestoringState;
   }
-}
-
-function openSidebarRolloutTarget(anchor) {
-  const href = anchor?.getAttribute("href") || "";
-  if (!href.startsWith("#") || href.length <= 1) {
-    return false;
-  }
-  let targetId = href.slice(1);
-  try {
-    targetId = decodeURIComponent(targetId);
-  } catch {
-    // Keep the literal hash target when it is not URI encoded.
-  }
-  const sidebarGroup = anchor.closest('.rollout-tree details[data-rollout-level="1"][data-rollout-nav-target]');
-  const turn = sidebarGroup
-    ? document.getElementById(sidebarGroup.dataset.rolloutNavTarget || "")
-    : null;
-  if (turn instanceof HTMLDetailsElement) {
-    turn.open = true;
-    renderLazyTurn(turn);
-  }
-  const target = document.getElementById(targetId);
-  if (!target) {
-    return false;
-  }
-  const stateKeys = [turn]
-    .filter(node => node instanceof HTMLDetailsElement && node.dataset.rolloutStateKey)
-    .map(node => node.dataset.rolloutStateKey);
-  document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", {
-    detail: { stateKeys }
-  }));
-  try {
-    history.pushState(null, "", `#${encodeURIComponent(targetId)}`);
-  } catch {
-    location.hash = targetId;
-  }
-  const scroll = () => target.scrollIntoView({ behavior: "auto", block: "start" });
-  scroll();
-  requestAnimationFrame(scroll);
-  enhanceRenderedContent();
-  return true;
 }
 
 async function copyTextToClipboard(text) {
@@ -5620,11 +5555,6 @@ function initRolloutControls() {
   document.querySelector("[data-rollout-expand-level-one]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("expand-level-one");
   });
-  document.querySelector("[data-rollout-toggle-wrap]")?.addEventListener("click", event => {
-    const root = document.querySelector(".codex-rollout");
-    root?.classList.toggle("rollout-nav-wrap");
-    event.currentTarget.textContent = root?.classList.contains("rollout-nav-wrap") ? "Truncate" : "Wrap";
-  });
   document.addEventListener("toggle", event => {
     const details = event.target;
     if (!(details instanceof HTMLDetailsElement) || !details.open) {
@@ -5645,11 +5575,6 @@ function initRolloutControls() {
     enhanceRenderedContent();
   }, true);
   document.addEventListener("click", async event => {
-    const navLink = event.target.closest('.rollout-tree a[href^="#"]');
-    if (navLink && openSidebarRolloutTarget(navLink)) {
-      event.preventDefault();
-      return;
-    }
     const copyMarkdownButton = event.target.closest("[data-rollout-copy-markdown]");
     if (copyMarkdownButton) {
       event.preventDefault();
@@ -5931,7 +5856,7 @@ export async function renderLocalCodexRolloutDocument() {
   await enhanceRenderedContent();
   return true;
 }
-/* END embedded rollout-renderer.js */
+    /* END embedded rollout-renderer.js */
 
     const STANDALONE_CSS = document.querySelector("style")?.textContent || "";
     const DIRECTORY_DB_NAME = "codex-rollout-viewer";
@@ -5954,6 +5879,7 @@ export async function renderLocalCodexRolloutDocument() {
     const WORKSPACE_SLOTS_KEY = createScopedStorageKey("workspace-slots-v1");
     const ACTIVE_WORKSPACE_SLOT_KEY = createScopedStorageKey("active-workspace-slot-v1");
     const WORKSPACE_NAVIGATION_KEY = createScopedStorageKey("workspace-navigation-v1");
+    const WORKSPACE_TABS_COLLAPSED_KEY = createScopedStorageKey("workspace-tabs-collapsed-v1");
     const DEFAULT_WORKSPACE_SLOT_ID = "default";
     const AUTO_REFRESH_INTERVALS = [0, 2000, 5000, 10000, 30000];
     const CONTENT_SEARCH_STATE_KEY = createScopedStorageKey("content-search-v1");
@@ -5979,6 +5905,7 @@ export async function renderLocalCodexRolloutDocument() {
     let workspaceSlots = [];
     let activeWorkspaceSlotId = DEFAULT_WORKSPACE_SLOT_ID;
     let workspaceInitialized = false;
+    let workspaceTabsCollapsed = readWorkspaceTabsCollapsed();
     let workspaceRefreshTimer = null;
     let workspaceNavigationVersion = 0;
     const workspaceRefreshes = new Map();
@@ -6569,6 +6496,98 @@ export async function renderLocalCodexRolloutDocument() {
       return slot.label || slot.directoryLabel || "Rollout";
     }
 
+    function readWorkspaceTabsCollapsed() {
+      try {
+        const saved = localStorage.getItem(WORKSPACE_TABS_COLLAPSED_KEY);
+        if (saved !== null) return saved === "true";
+      } catch {}
+      return window.matchMedia("(max-width: 760px)").matches;
+    }
+
+    function toggleWorkspaceTabs() {
+      workspaceTabsCollapsed = !workspaceTabsCollapsed;
+      try {
+        localStorage.setItem(WORKSPACE_TABS_COLLAPSED_KEY, String(workspaceTabsCollapsed));
+      } catch {}
+      installWorkspaceBar();
+    }
+
+    function workspaceIcon(kind) {
+      const paths = {
+        panel: '<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m-2-9v4"/>',
+        folders: '<path d="M2 7V4a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1v2M2 8h16v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/>',
+        folder: '<path d="M2 6a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/>',
+        rollout: '<path d="M5 2h7l4 4v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm7 0v5h4M7 11h6m-6 3h4"/>',
+        plus: '<path d="M10 3v14M3 10h14"/>'
+      };
+      return `<svg class="standalone-workspace-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[kind] || paths.rollout}</svg>`;
+    }
+
+    function getActiveWorkspaceTabKey() {
+      if (activeWorkspaceViewKind === "rollout") return `rollout:${activeWorkspaceSlotId}`;
+      if (activeWorkspaceViewKind === "index") return `directory:${selectedDirectoryEntry?.id || ""}`;
+      return "folders";
+    }
+
+    function renderWorkspaceTabs() {
+      const activeKey = getActiveWorkspaceTabKey();
+      const tabAttributes = key => `role="tab" aria-selected="${key === activeKey}" tabindex="${key === activeKey ? 0 : -1}" data-workspace-key="${escapeAttribute(key)}"`;
+      return `
+        <span class="standalone-workspace-tab is-folders ${activeWorkspaceViewKind === "folders" ? "is-active" : ""}" role="presentation" title="Sessions folders">
+          <button class="standalone-workspace-tab-button" type="button" ${tabAttributes("folders")} data-sessions-folders-tab aria-label="Sessions folders">
+            <span class="standalone-workspace-tab-icon">${workspaceIcon("folders")}</span>
+            <span class="standalone-workspace-tab-label">Sessions folders</span>
+          </button>
+        </span>
+        ${openDirectoryTabIds.size ? '<div class="standalone-workspace-group-label" role="presentation">Folders</div>' : ""}
+        ${[...openDirectoryTabIds].map(id => getDirectoryEntryById(id)).filter(Boolean).map(entry => `
+          <span class="standalone-workspace-tab is-folder ${activeWorkspaceViewKind === "index" && selectedDirectoryEntry?.id === entry.id ? "is-active" : ""}" role="presentation" style="--folder-accent: ${escapeAttribute(getFolderTabColor(entry.id))}" title="${escapeAttribute(getDirectoryEntryLabel(entry))}">
+            <button class="standalone-workspace-tab-button" type="button" ${tabAttributes(`directory:${entry.id}`)} data-directory-tab-id="${escapeAttribute(entry.id)}" aria-label="${escapeAttribute(getDirectoryEntryLabel(entry))}">
+              <span class="standalone-workspace-tab-icon">${workspaceIcon("folder")}</span>
+              <span class="standalone-workspace-tab-label">${escapeHtml(getDirectoryEntryLabel(entry))}</span>
+            </button>
+            <button class="standalone-workspace-tab-close" type="button" data-workspace-key="close-directory:${escapeAttribute(entry.id)}" data-close-directory-tab-id="${escapeAttribute(entry.id)}" title="Close folder" aria-label="Close folder: ${escapeAttribute(getDirectoryEntryLabel(entry))}">×</button>
+          </span>
+        `).join("")}
+        <div class="standalone-workspace-group-label" role="presentation">Rollouts <span>${workspaceSlots.length}</span></div>
+        ${workspaceSlots.map(slot => `
+          <span class="standalone-workspace-tab is-rollout ${slot.directoryId ? "is-folder-rollout" : ""} ${activeWorkspaceViewKind === "rollout" && slot.id === activeWorkspaceSlotId ? "is-active" : ""} ${slot.hasUpdates ? "has-updates" : ""} ${slot.refreshState === "refreshing" ? "is-refreshing" : ""} ${slot.refreshState === "error" ? "is-error" : ""}" role="presentation" ${slot.directoryId ? `style="--rollout-accent: ${escapeAttribute(getFolderTabColor(slot.directoryId))}"` : ""} title="${escapeAttribute([getWorkspaceTabLabel(slot), slot.refreshMessage].filter(Boolean).join(" — "))}">
+            <button class="standalone-workspace-tab-button" type="button" ${tabAttributes(`rollout:${slot.id}`)} data-workspace-slot-id="${escapeAttribute(slot.id)}" aria-label="${escapeAttribute(getWorkspaceTabLabel(slot))}${slot.refreshState === "error" ? "; refresh failed" : slot.refreshState === "refreshing" ? "; refreshing" : slot.hasUpdates ? "; updated" : ""}">
+              <span class="standalone-workspace-tab-icon">${workspaceIcon("rollout")}<span class="standalone-workspace-tab-status" aria-hidden="true"></span></span>
+              <span class="standalone-workspace-tab-label">${escapeHtml(getWorkspaceTabLabel(slot))}</span>
+            </button>
+            <button class="standalone-workspace-tab-close" type="button" data-workspace-key="close-rollout:${escapeAttribute(slot.id)}" data-close-workspace-slot-id="${escapeAttribute(slot.id)}" title="Close session" aria-label="Close rollout: ${escapeAttribute(getWorkspaceTabLabel(slot))}">×</button>
+          </span>
+        `).join("")}
+      `;
+    }
+
+    function handleWorkspaceTabKeydown(event) {
+      const tab = event.target.closest('.standalone-workspace-tabs [role="tab"]');
+      if (!tab || event.altKey || event.ctrlKey || event.metaKey) return;
+      const tabs = [...document.querySelectorAll('.standalone-workspace-tabs [role="tab"]')];
+      const index = tabs.indexOf(tab);
+      const next = event.key === "ArrowDown" ? (index + 1) % tabs.length
+        : event.key === "ArrowUp" ? (index - 1 + tabs.length) % tabs.length
+        : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+      if (next >= 0) {
+        event.preventDefault();
+        tabs.forEach((node, position) => { node.tabIndex = position === next ? 0 : -1; });
+        tabs[next].focus({ preventScroll: true });
+        tabs[next].scrollIntoView({ block: "nearest" });
+      }
+    }
+
+    function focusWorkspaceControl(key) {
+      const control = document.querySelector(`[data-workspace-key="${CSS.escape(key)}"]`);
+      if (control?.matches('[role="tab"]')) {
+        document.querySelectorAll('.standalone-workspace-tabs [role="tab"]').forEach(tab => {
+          tab.tabIndex = tab === control ? 0 : -1;
+        });
+      }
+      control?.focus({ preventScroll: true });
+    }
+
     function installWorkspaceBar() {
       if (!workspaceInitialized || !document.body) {
         return;
@@ -6579,52 +6598,59 @@ export async function renderLocalCodexRolloutDocument() {
         style.textContent = STANDALONE_CSS;
         document.head.append(style);
       }
-      document.querySelector(".standalone-workspace-bar")?.remove();
+      document.documentElement.dataset.workspaceReady = "true";
+      document.documentElement.dataset.workspaceTabsCollapsed = String(workspaceTabsCollapsed);
+      const previousBar = document.querySelector(".standalone-workspace-bar");
+      const previousToolbar = document.querySelector(".standalone-workspace-toolbar");
+      const scrollTop = previousBar?.querySelector(".standalone-workspace-tabs")?.scrollTop || 0;
+      const focusedKey = document.activeElement?.dataset.workspaceKey;
+      const activeKey = getActiveWorkspaceTabKey();
       const activeSlot = activeWorkspaceViewKind === "rollout" ? getWorkspaceSlot() : null;
+      const activeTitle = activeSlot ? getWorkspaceTabLabel(activeSlot)
+        : activeWorkspaceViewKind === "index" ? currentIndexLabel || "Sessions folder" : "Sessions folders";
       const bar = document.createElement("nav");
       bar.className = "standalone-workspace-bar";
-      bar.setAttribute("aria-label", "Tracked rollout sessions");
+      bar.dataset.activeTabKey = activeKey;
+      bar.setAttribute("aria-label", "Workspace navigation");
       bar.innerHTML = `
-        <div class="standalone-workspace-tabs">
-          <span class="standalone-workspace-tab is-folders ${activeWorkspaceViewKind === "folders" ? "is-active" : ""}" title="Sessions folders">
-            <button class="standalone-workspace-tab-button" type="button" data-sessions-folders-tab>
-              <span class="standalone-workspace-tab-status" aria-hidden="true"></span>
-              <span class="standalone-workspace-tab-label">Sessions folders</span>
-            </button>
-          </span>
-          ${[...openDirectoryTabIds].map(id => getDirectoryEntryById(id)).filter(Boolean).map(entry => `
-            <span class="standalone-workspace-tab is-folder ${activeWorkspaceViewKind === "index" && selectedDirectoryEntry?.id === entry.id ? "is-active" : ""}" style="--folder-accent: ${escapeAttribute(getFolderTabColor(entry.id))}" title="${escapeAttribute(getDirectoryEntryLabel(entry))}">
-              <button class="standalone-workspace-tab-button" type="button" data-directory-tab-id="${escapeAttribute(entry.id)}">
-                <span class="standalone-workspace-tab-status" aria-hidden="true"></span>
-                <span class="standalone-workspace-tab-label">${escapeHtml(getDirectoryEntryLabel(entry))}</span>
-              </button>
-              <button class="standalone-workspace-tab-close" type="button" data-close-directory-tab-id="${escapeAttribute(entry.id)}" title="Close folder">×</button>
-            </span>
-          `).join("")}
-          ${workspaceSlots.map(slot => `
-            <span class="standalone-workspace-tab is-rollout ${slot.directoryId ? "is-folder-rollout" : ""} ${activeWorkspaceViewKind === "rollout" && slot.id === activeWorkspaceSlotId ? "is-active" : ""} ${slot.hasUpdates ? "has-updates" : ""} ${slot.refreshState === "refreshing" ? "is-refreshing" : ""} ${slot.refreshState === "error" ? "is-error" : ""}" ${slot.directoryId ? `style="--rollout-accent: ${escapeAttribute(getFolderTabColor(slot.directoryId))}"` : ""} title="${escapeAttribute(slot.refreshMessage || getWorkspaceTabLabel(slot))}">
-              <button class="standalone-workspace-tab-button" type="button" data-workspace-slot-id="${escapeAttribute(slot.id)}">
-                <span class="standalone-workspace-tab-status" aria-hidden="true"></span>
-                <span class="standalone-workspace-tab-label">${escapeHtml(getWorkspaceTabLabel(slot))}</span>
-              </button>
-              <button class="standalone-workspace-tab-close" type="button" data-close-workspace-slot-id="${escapeAttribute(slot.id)}" title="Close session">×</button>
-            </span>
-          `).join("")}
+        <div class="standalone-workspace-heading">
+          <button class="standalone-workspace-toggle" type="button" data-toggle-workspace-tabs data-workspace-key="toggle-tabs" aria-label="${workspaceTabsCollapsed ? "Pin vertical tabs" : "Collapse vertical tabs"}" title="${workspaceTabsCollapsed ? "Pin vertical tabs" : "Collapse vertical tabs"}" aria-expanded="${!workspaceTabsCollapsed}" aria-controls="workspace-tabs">${workspaceIcon("panel")}</button>
+          <span class="standalone-workspace-brand">Rollout Viewer</span>
         </div>
-        <div class="standalone-workspace-actions">
-          <button class="standalone-workspace-action" type="button" data-focus-content-search>Search</button>
-          ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index title="Return to the source folder tab">Back to index</button>` : ""}
-          <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
-          <button class="standalone-workspace-action" type="button" data-refresh-all-workspace-slots ${workspaceSlots.some(slot => slot.sourceId) ? "" : "disabled"}>Refresh all</button>
-          <button class="standalone-workspace-action" type="button" data-close-all-workspace-slots ${workspaceSlots.length ? "" : "disabled"} title="Close all rollout tabs">Close rollouts</button>
-          <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh title="Automatic refresh for this session" ${activeSlot ? "" : "disabled"}>
-            ${AUTO_REFRESH_INTERVALS.map(value => `<option value="${value}" ${activeSlot?.autoRefreshMs === value ? "selected" : ""}>${formatWorkspaceRefreshOption(value)}</option>`).join("")}
-          </select>
-          <button class="standalone-workspace-action" type="button" data-popout-workspace-slot ${activeSlot ? "" : "disabled"} title="Clone this session into an independent window">New window</button>
+        <div class="standalone-workspace-tabs" id="workspace-tabs" role="tablist" aria-label="Open folders and rollouts" aria-orientation="vertical">
+          ${renderWorkspaceTabs()}
+        </div>
+        <div class="standalone-workspace-new">
+          <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input data-workspace-file-input hidden>
+          <button class="standalone-workspace-add" type="button" data-open-jsonl-file data-workspace-key="open-jsonl" title="Open JSONL" aria-label="Open JSONL">${workspaceIcon("plus")}<span>Open JSONL</span></button>
+          <button class="standalone-workspace-add" type="button" data-open-sessions-directory data-workspace-key="add-folder" title="Add sessions folder" aria-label="Add sessions folder">${workspaceIcon("folder")}<span>Add sessions folder</span></button>
         </div>
       `;
-      document.body.prepend(bar);
-      bar.querySelector(`[data-workspace-slot-id="${CSS.escape(activeWorkspaceSlotId)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const toolbar = document.createElement("div");
+      toolbar.className = "standalone-workspace-toolbar";
+      toolbar.innerHTML = `
+        <div class="standalone-workspace-current" title="${escapeAttribute(activeTitle)}">${escapeHtml(activeTitle)}</div>
+        <div class="standalone-workspace-actions" role="group" aria-label="Workspace actions">
+          <button class="standalone-workspace-action" type="button" data-focus-content-search data-workspace-key="search">Search</button>
+          ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index data-workspace-key="back-index" title="Return to the source folder tab">Back to index</button>` : ""}
+          <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot data-workspace-key="refresh" ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
+          <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh data-workspace-key="auto-refresh" title="Automatic refresh for this session" aria-label="Automatic refresh for this session" ${activeSlot ? "" : "disabled"}>
+            ${AUTO_REFRESH_INTERVALS.map(value => `<option value="${value}" ${activeSlot?.autoRefreshMs === value ? "selected" : ""}>${formatWorkspaceRefreshOption(value)}</option>`).join("")}
+          </select>
+          <button class="standalone-workspace-action" type="button" data-refresh-all-workspace-slots data-workspace-key="refresh-all" ${workspaceSlots.some(slot => slot.sourceId) ? "" : "disabled"}>Refresh all</button>
+          <button class="standalone-workspace-action" type="button" data-close-all-workspace-slots data-workspace-key="close-all" ${workspaceSlots.length ? "" : "disabled"} title="Close all rollout tabs">Close rollouts</button>
+          <button class="standalone-workspace-action" type="button" data-popout-workspace-slot data-workspace-key="popout" ${activeSlot ? "" : "disabled"} title="Clone this session into an independent window">New window</button>
+        </div>
+      `;
+      previousBar?.remove();
+      previousToolbar?.remove();
+      document.body.prepend(bar, toolbar);
+      const tabs = bar.querySelector(".standalone-workspace-tabs");
+      tabs.scrollTop = scrollTop;
+      if (previousBar?.dataset.activeTabKey !== activeKey) {
+        bar.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+      if (focusedKey) focusWorkspaceControl(focusedKey);
     }
 
     function getDefaultSessionsPathHint() {
@@ -7850,7 +7876,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     async function chooseJsonlFile() {
       if (!window.showOpenFilePicker) {
-        setStatus("File picker is unavailable in this browser. Use Choose JSONL file instead.", true);
+        document.querySelector("[data-workspace-file-input], [data-file-input]")?.click();
         return;
       }
       try {
@@ -8157,16 +8183,13 @@ export async function renderLocalCodexRolloutDocument() {
     function captureRenderedUiState(source) {
       const details = {};
       document.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
-        if (node.closest(".rollout-sidebar") || node.dataset.rolloutLevel === "2") {
+        if (node.dataset.rolloutLevel === "2") {
           return;
         }
         details[node.dataset.rolloutStateKey] = node.open;
       });
       const diffModes = {};
       document.querySelectorAll("[data-rollout-diff][data-rollout-state-key]").forEach(node => {
-        if (node.closest(".rollout-sidebar")) {
-          return;
-        }
         diffModes[node.dataset.rolloutStateKey] = getDiffMode(node);
       });
       return {
@@ -8189,9 +8212,6 @@ export async function renderLocalCodexRolloutDocument() {
 
     function applySavedRenderedUiState(root = document) {
       root.querySelectorAll("details[data-rollout-state-key]").forEach(node => {
-        if (node.closest(".rollout-sidebar")) {
-          return;
-        }
         if (node.dataset.rolloutLevel === "2") {
           if (!node.querySelector(".standalone-search-target")) node.open = false;
           return;
@@ -8202,9 +8222,6 @@ export async function renderLocalCodexRolloutDocument() {
         }
       });
       root.querySelectorAll("[data-rollout-diff][data-rollout-state-key]").forEach(node => {
-        if (node.closest(".rollout-sidebar")) {
-          return;
-        }
         const key = node.dataset.rolloutStateKey;
         if (Object.prototype.hasOwnProperty.call(currentRenderedUiState.diffModes, key)) {
           applyDiffMode(node, currentRenderedUiState.diffModes[key]);
@@ -8284,7 +8301,7 @@ export async function renderLocalCodexRolloutDocument() {
       });
       document.addEventListener("toggle", event => {
         const node = event.target;
-        if (isRestoringRenderedUiState || !(node instanceof HTMLDetailsElement) || !node.dataset.rolloutStateKey || node.dataset.rolloutLevel === "2" || node.closest(".rollout-sidebar") || !currentRenderedSource) {
+        if (isRestoringRenderedUiState || !(node instanceof HTMLDetailsElement) || !node.dataset.rolloutStateKey || node.dataset.rolloutLevel === "2" || !currentRenderedSource) {
           return;
         }
         currentRenderedUiState ||= {
@@ -8321,7 +8338,7 @@ export async function renderLocalCodexRolloutDocument() {
         }
         const diff = button.closest("[data-rollout-diff][data-rollout-state-key]")
           || button.closest("[data-rollout-diff-scope]")?.querySelector("[data-rollout-diff][data-rollout-state-key]");
-        if (!diff || diff.closest(".rollout-sidebar")) {
+        if (!diff) {
           return;
         }
         currentRenderedUiState ||= {
@@ -8999,33 +9016,48 @@ export async function renderLocalCodexRolloutDocument() {
       await renderDirectorySelectionPage();
     }
 
+    document.addEventListener("keydown", handleWorkspaceTabKeydown);
+
     document.addEventListener("click", async event => {
+      if (event.target.closest("[data-toggle-workspace-tabs]")) {
+        toggleWorkspaceTabs();
+        return;
+      }
+      const restoreTabFocus = () => {
+        if (event.detail === 0) focusWorkspaceControl(getActiveWorkspaceTabKey());
+      };
       if (event.target.closest("[data-sessions-folders-tab]")) {
         await openSessionsFoldersTab();
+        restoreTabFocus();
         return;
       }
       const closeDirectoryTabButton = event.target.closest("[data-close-directory-tab-id]");
       if (closeDirectoryTabButton) {
         await closeDirectoryTab(closeDirectoryTabButton.dataset.closeDirectoryTabId);
+        restoreTabFocus();
         return;
       }
       const directoryTab = event.target.closest("[data-directory-tab-id]");
       if (directoryTab) {
         await openDirectoryTab(directoryTab.dataset.directoryTabId);
+        restoreTabFocus();
         return;
       }
       const workspaceSlotButton = event.target.closest("[data-workspace-slot-id]");
       if (workspaceSlotButton) {
         await activateWorkspaceSlot(workspaceSlotButton.dataset.workspaceSlotId);
+        restoreTabFocus();
         return;
       }
       const closeWorkspaceSlotButton = event.target.closest("[data-close-workspace-slot-id]");
       if (closeWorkspaceSlotButton) {
         await closeWorkspaceSlot(closeWorkspaceSlotButton.dataset.closeWorkspaceSlotId);
+        restoreTabFocus();
         return;
       }
       if (event.target.closest("[data-close-all-workspace-slots]")) {
         await closeAllWorkspaceSlots();
+        restoreTabFocus();
         return;
       }
       if (event.target.closest("[data-refresh-workspace-slot]")) {

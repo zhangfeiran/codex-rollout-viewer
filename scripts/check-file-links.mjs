@@ -124,6 +124,11 @@ export async function checkFileLinks(realFile) {
     const real = context.parseCodexRolloutJsonl(await readFile(realFile, "utf8"));
     assert.ok(context.isCodexRolloutRecords(real.records));
     await context.renderCodexRolloutRecords(real, { markdownLinkDrive: "X:" });
+    const article = context.document.body.children[0].innerHTML;
+    assert.match(article, /^\s*<main class="rollout-main">/);
+    assert.doesNotMatch(article, /<aside\b/);
+    assert.match(article, /class="rollout-view-controls"/);
+    assert.match(article, /class="rollout-turn-list"/);
     console.log(`Rendered real rollout with drive mapping: ${real.records.length} records, ${real.errors.length} parse errors.`);
   }
   console.log("Checked per-folder drive persistence, isolation, clearing, Markdown targets, copied source, and renderer switching.");

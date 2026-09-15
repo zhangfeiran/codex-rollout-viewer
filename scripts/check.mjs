@@ -5,6 +5,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { checkContentSearch } from "./check-search.mjs";
 import { checkFileLinks } from "./check-file-links.mjs";
+import { checkWorkspace } from "./check-workspace.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -92,7 +93,7 @@ async function checkLocalHtml(fileName) {
   assert.match(bootScript, /class="standalone-workspace-tab is-rollout/, "rollout tabs must have a distinct shape class");
   assert.match(bootScript, /slot\.directoryId \? "is-folder-rollout"/, "rollout tabs from remembered folders must carry a folder color class");
   assert.match(bootScript, /getFolderTabColor\(slot\.directoryId\)/, "rollout tabs must reuse their sessions-folder tab color");
-  assert.match(bootScript, /data-back-index/, "Back to index must live in the workspace tab row");
+  assert.match(bootScript, /data-back-index/, "Back to index must live in the workspace toolbar");
   assert.match(bootScript, /label: summarizeText\(item\.title \|\| item\.name, 64\)/, "opening an indexed rollout must create a title-based tab");
   assert.match(
     bootScript,
@@ -231,13 +232,12 @@ async function checkMarkdownRendering() {
   assert.match(rendererSource, /@media \(max-width: 640px\)[\s\S]*?\.rollout-final-answer-turn\s*\{[\s\S]*?width: calc\(100% - 12px\);[\s\S]*?margin-left: 12px;/, "final-answer turns must keep a smaller mobile indent");
   assert.match(rendererSource, /\.rollout-steer-turn\s*\{[\s\S]*?width: calc\(100% - 28px\);[\s\S]*?margin-left: 28px;/, "steer turns must be narrower and indented on desktop");
   assert.match(rendererSource, /@media \(max-width: 640px\)[\s\S]*?\.rollout-steer-turn\s*\{[\s\S]*?width: calc\(100% - 12px\);[\s\S]*?margin-left: 12px;/, "steer turns must keep a smaller mobile indent");
-  assert.match(rendererSource, /\.rollout-tree > details\.rollout-steer-nav\s*\{[\s\S]*?margin-left: 14px;/, "steer turns must also be indented in the outline");
   const runnableRenderer = rendererSource
     .replace(/^export\s+/gm, "")
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, openSidebarRolloutTarget, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderHeader, renderMarkdownContent, renderMessage, renderSidebarFinalAnswer, renderSidebarGroup, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderHeader, renderMarkdownContent, renderMessage, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -369,21 +369,6 @@ async function checkMarkdownRendering() {
   const localCompactHtml = rendererContext.__rolloutTest.renderGroupSection(localCompactSection, { callById: new Map() });
   assert.match(localCompactHtml, /Local compact[\s\S]*local compact summary[\s\S]*Copy MD[\s\S]*Handoff summary/, "local compact must render the handoff Markdown inside the compact section");
   assert.doesNotMatch(localCompactHtml, /phase: final_answer|Another model produced a handoff summary/, "local compact rendering must not retain final-answer labeling or duplicate the wrapper message");
-
-  const sidebarHtml = rendererContext.__rolloutTest.renderSidebarGroup({
-    id: "turn-1",
-    index: 1,
-    title: "Example turn",
-    isPreamble: false,
-    records: [
-      { line: 1, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Question" }] } } },
-      { line: 2, value: { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Answer" }] } } }
-    ]
-  }, new Map());
-  assert.match(sidebarHtml, /<details data-rollout-level="1"/, "sidebar turns must remain collapsible");
-  assert.match(sidebarHtml, /<a href="#assistant-2">Answer<\/a>/, "sidebar assistant sections must remain direct links");
-  assert.doesNotMatch(sidebarHtml, /data-rollout-level="2"/, "sidebar assistant sections must not expand further");
-  assert.doesNotMatch(sidebarHtml, /data-rollout-lazy-sidebar/, "sidebar assistant record children must not be rendered");
 
   const mainSectionHtml = rendererContext.__rolloutTest.renderAssistantSection({
     id: "assistant-2",
@@ -638,7 +623,6 @@ async function checkMarkdownRendering() {
   assert.equal(steerSections.some(section => section.records.includes(finalSection.records[0])), false, "a final_answer from an earlier turn must not render inside the steer turn");
   const steerHtml = rendererContext.__rolloutTest.renderTurnGroup(completedGroups[1], { callById: new Map() });
   assert.match(steerHtml, /class="rollout-turn rollout-steer-turn"[\s\S]*rollout-turn-meta">\s*<span>steer<\/span>/, "steer turns must render with the indented class and visible metadata");
-  assert.match(rendererContext.__rolloutTest.renderSidebarGroup(completedGroups[1], new Map()), /class="rollout-steer-nav"/, "steer turns must be identifiable in the outline");
   const steerLifecycle = rendererContext.__rolloutTest.getSteerParentTurnIds([
     { value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "A" }], internal_chat_message_metadata_passthrough: { turn_id: "a" } } } },
     { value: { type: "event_msg", payload: { type: "task_complete", turn_id: "a" } } },
@@ -701,7 +685,6 @@ async function checkMarkdownRendering() {
   assert.match(repeatedGitDiff, /-old value\n-before\n\+new value\n\+after/, "copied final diffs must contain the composed net changes for a repeatedly edited file");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
   assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-49"/, "the final section must follow its user turn as a sibling");
-  assert.match(rendererContext.__rolloutTest.renderSidebarFinalAnswer(completedGroups[0]), /<a class="rollout-final-answer-link" href="#final-49">1\. Finished result More details<\/a>/, "the outline final-answer link must use the same collapsed full-body title");
 
   const execInput = [
     "const results = await Promise.all([",
@@ -885,67 +868,6 @@ async function checkMarkdownRendering() {
     [true, true, false],
     "expand-to-level-one must open level one without opening deeper directories"
   );
-
-  class FakeDetailsElement {}
-  let lazyTurnRendered = false;
-  let targetScrolls = 0;
-  const lazyTurnBody = {
-    childNodes: [],
-    set innerHTML(value) {
-      this.value = value;
-      this.childNodes = [{}];
-      lazyTurnRendered = true;
-    }
-  };
-  const turnNode = Object.assign(new FakeDetailsElement(), {
-    dataset: { rolloutLazyKey: "missing-test-key", rolloutStateKey: "turn-1:body" },
-    open: false,
-    querySelector: () => lazyTurnBody
-  });
-  const targetNode = Object.assign(new FakeDetailsElement(), {
-    dataset: { rolloutStateKey: "assistant-2:body" },
-    open: false,
-    scrollIntoView: () => { targetScrolls += 1; }
-  });
-  const navigationEvents = [];
-  let pushedHash = "";
-  rendererContext.HTMLDetailsElement = FakeDetailsElement;
-  rendererContext.CustomEvent = class {
-    constructor(type, init = {}) {
-      this.type = type;
-      this.detail = init.detail;
-    }
-  };
-  rendererContext.document = {
-    getElementById(id) {
-      if (id === "turn-1") {
-        return turnNode;
-      }
-      return id === "assistant-2" && lazyTurnRendered ? targetNode : null;
-    },
-    dispatchEvent(event) {
-      navigationEvents.push(event);
-    }
-  };
-  rendererContext.history = { pushState: (state, title, hash) => { pushedHash = hash; } };
-  rendererContext.location = { hash: "" };
-  rendererContext.requestAnimationFrame = callback => callback();
-  rendererContext.enhanceRenderedContent = () => Promise.resolve();
-  const sidebarAnchor = {
-    getAttribute: () => "#assistant-2",
-    closest: () => ({ dataset: { rolloutNavTarget: "turn-1" } })
-  };
-  assert.equal(rendererContext.__rolloutTest.openSidebarRolloutTarget(sidebarAnchor), true, "sidebar navigation must resolve a lazy main target");
-  assert.equal(turnNode.open, true, "sidebar navigation must open the parent main turn");
-  assert.equal(targetNode.open, false, "sidebar navigation must leave the target main section collapsed");
-  assert.equal(targetScrolls, 2, "sidebar navigation must scroll immediately and after layout");
-  assert.equal(pushedHash, "#assistant-2", "sidebar navigation must update the URL hash");
-  const navigationOpenEvent = navigationEvents.find(event => event.type === "codex-rollout-navigation-open");
-  assert.deepEqual(
-    Array.from(navigationOpenEvent.detail.stateKeys),
-    ["turn-1:body"],
-    "sidebar navigation must persist only the opened parent turn state"
-  );
 }
 
 await addJsFiles(path.resolve(projectDir, "vendor"));
@@ -958,5 +880,6 @@ await checkLocalHtml("codex-rollout-viewer.html");
 await checkMarkdownRendering();
 await checkContentSearch();
 await checkFileLinks();
+await checkWorkspace();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

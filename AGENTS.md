@@ -38,6 +38,6 @@ This project only owns Codex rollout JSONL viewing. It is intentionally separate
 
 - Keep this project focused on local Codex rollout viewing.
 - Do not add Web Highlights highlighter/sidebar/local-sync behavior here.
-- Preserve the compact dark-mode outline/body layout unless the user asks for a UI change.
+- Preserve the dark-mode vertical workspace tabs and single-column rollout content layout. Do not restore the removed rollout outline.
 - Long content and tool outputs should stay collapsed by default.
 - When changing parser behavior, validate with a real Codex rollout JSONL file when practical.

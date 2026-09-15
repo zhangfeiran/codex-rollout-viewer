@@ -23,7 +23,6 @@ const ROLLOUT_CSS = `
 :root {
   color-scheme: dark;
   --wh-rollout-bg: #0b0f14;
-  --wh-rollout-sidebar: #0f141b;
   --wh-rollout-panel: #131922;
   --wh-rollout-panel-strong: #18212c;
   --wh-rollout-panel-soft: #10161d;
@@ -62,20 +61,7 @@ body.codex-rollout-page {
 }
 
 .codex-rollout {
-  display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
   min-height: 100vh;
-}
-
-.rollout-sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  min-width: 0;
-  padding: 12px;
-  overflow: auto;
-  background: var(--wh-rollout-sidebar);
-  border-right: 1px solid var(--wh-rollout-border-muted);
 }
 
 .rollout-main {
@@ -180,23 +166,15 @@ body.codex-rollout-page {
   font-weight: 700;
 }
 
-.rollout-tree-title {
-  margin: 2px 0 8px;
-  color: var(--wh-rollout-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.rollout-tree-actions {
+.rollout-view-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
 .rollout-tool-btn {
-  flex: 1 1 74px;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 24px;
   padding: 3px 7px;
@@ -213,101 +191,6 @@ body.codex-rollout-page {
 .rollout-tool-btn:hover {
   color: var(--wh-rollout-fg);
   background: var(--wh-rollout-panel-strong);
-}
-
-.rollout-tree {
-  display: grid;
-  gap: 4px;
-}
-
-.rollout-tree a,
-.rollout-tree summary {
-  color: var(--wh-rollout-muted);
-  text-decoration: none;
-}
-
-.rollout-tree a {
-  display: block;
-  min-width: 0;
-  padding: 3px 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: 5px;
-}
-
-.codex-rollout.rollout-nav-wrap .rollout-tree a,
-.codex-rollout.rollout-nav-wrap .rollout-nav-label {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.rollout-tree details[data-rollout-level="2"] {
-  margin-left: 8px;
-}
-
-.rollout-tree > details.rollout-steer-nav {
-  margin-left: 14px;
-}
-
-.rollout-tree a:hover {
-  color: var(--wh-rollout-fg);
-  background: var(--wh-rollout-panel-strong);
-  text-decoration: none;
-}
-
-.rollout-tree > .rollout-final-answer-link {
-  width: calc(100% - 14px);
-  margin-left: 14px;
-  color: var(--wh-rollout-green);
-  font-size: 11px;
-}
-
-.rollout-tree details {
-  border-left: 1px solid var(--wh-rollout-border-muted);
-}
-
-.rollout-tree details + details {
-  margin-top: 2px;
-}
-
-.rollout-tree summary {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 2px;
-  padding: 3px 4px;
-  cursor: pointer;
-  list-style: none;
-  border-radius: 5px;
-}
-
-.rollout-tree summary::-webkit-details-marker {
-  display: none;
-}
-
-.rollout-tree summary::before {
-  content: ">";
-  color: var(--wh-rollout-subtle);
-  display: inline-block;
-}
-
-.rollout-tree details[open] > summary::before {
-  transform: rotate(90deg);
-}
-
-.rollout-tree-children {
-  display: grid;
-  gap: 1px;
-  padding-left: 14px;
-}
-
-.rollout-nav-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .rollout-parse-errors {
@@ -1218,20 +1101,6 @@ pre + .rollout-kv,
 .hljs-built_in,
 .hljs-title.class_ {
   color: #d2a8ff;
-}
-
-@media (max-width: 940px) {
-  .codex-rollout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rollout-sidebar {
-    position: static;
-    height: auto;
-    max-height: 40vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--wh-rollout-border-muted);
-  }
 }
 
 @media (max-width: 640px) {
@@ -3979,7 +3848,6 @@ function buildGroupSections(group) {
       currentAssistantSection = {
         id: `assistant-${record.line}`,
         title: getFullTitleText(text),
-        navTitle: summarizeText(text, 100),
         records: [record],
         standalone: false
       };
@@ -3999,7 +3867,6 @@ function buildGroupSections(group) {
           id: `compact-${record.line}`,
           kind: "compact",
           title: isLocalCompact ? "Local compact" : "Context compacted",
-          navTitle: isLocalCompact ? "Local compact" : "Context compacted",
           records: localCompactSummary && groupedLocalCompactSummaries.has(localCompactSummary)
             ? [localCompactSummary, record]
             : [record],
@@ -4021,7 +3888,6 @@ function buildGroupSections(group) {
           id: `post-compact-${record.line}`,
           kind: "activity",
           title: "Post-compact activity",
-          navTitle: "Post-compact activity",
           records: [],
           standalone: false
         };
@@ -4042,7 +3908,6 @@ function buildGroupSections(group) {
           id: `activity-${record.line}`,
           kind: "activity",
           title: "Activity without assistant",
-          navTitle: "Activity without assistant",
           records: [],
           standalone: false
         };
@@ -4098,54 +3963,6 @@ function getGroupFinalAnswerRecord(group) {
     const finalTurnId = getTurnId(record);
     return !userTurnId || !finalTurnId || finalTurnId === userTurnId;
   }) || null;
-}
-
-function renderSidebar(records, groups, errors, callById, options = {}) {
-  const session = getSessionMeta(records);
-  const fileName = options.fileName || getFileName(options.sourceUrl);
-  return `
-    <aside class="rollout-sidebar" aria-label="Rollout outline">
-      <p class="rollout-tree-title">Outline</p>
-      <div class="rollout-tree-actions">
-        <button class="rollout-tool-btn" type="button" title="Collapse to level 0" data-rollout-collapse-level-zero>Collapse L0</button>
-        <button class="rollout-tool-btn" type="button" title="Collapse to level 1" data-rollout-collapse-level-one>Collapse L1</button>
-        <button class="rollout-tool-btn" type="button" title="Expand to level 1" data-rollout-expand-level-one>Expand L1</button>
-        <button class="rollout-tool-btn" type="button" data-rollout-toggle-wrap>Wrap</button>
-      </div>
-      <nav class="rollout-tree">
-        <a href="#rollout-top">${escapeHtml(session?.id || fileName)}</a>
-        ${errors.length ? `<a href="#parse-errors">Parse errors (${formatNumber(errors.length)})</a>` : ""}
-        ${groups.map(group => `${renderSidebarGroup(group, callById)}${renderSidebarFinalAnswer(group)}`).join("")}
-      </nav>
-    </aside>
-  `;
-}
-
-function renderSidebarGroup(group, callById) {
-  const label = group.isPreamble ? "Preamble" : `${group.index}. ${group.title}`;
-  const assistantSections = buildGroupSections(group).filter(section => !section.standalone);
-  const children = assistantSections
-    .map(section => renderSidebarAssistantSection(section, callById))
-    .join("");
-  return `
-    <details${group.isSteer ? ' class="rollout-steer-nav"' : ""} data-rollout-level="1" data-rollout-nav-target="${escapeAttribute(group.id)}">
-      <summary><span class="rollout-nav-label">${escapeHtml(label)}</span></summary>
-      <div class="rollout-tree-children">
-        <a href="#${escapeAttribute(group.id)}">${escapeHtml(label)}</a>
-        ${children}
-      </div>
-    </details>
-  `;
-}
-
-function renderSidebarAssistantSection(section, callById) {
-  const title = section.navTitle || section.title;
-  return `<a href="#${escapeAttribute(section.id)}">${escapeHtml(title)}</a>`;
-}
-
-function renderSidebarFinalAnswer(group) {
-  const section = buildGroupFinalAnswer(group);
-  return section ? `<a class="rollout-final-answer-link" href="#${escapeAttribute(section.id)}">${escapeHtml(`${group.index}. ${section.title}`)}</a>` : "";
 }
 
 function renderEntry(record, role, title, body, options = {}) {
@@ -4758,9 +4575,13 @@ function renderDocument(records, errors, options = {}) {
   article.className = "codex-rollout";
   article.dataset.codexRolloutRendered = "true";
   article.innerHTML = `
-    ${renderSidebar(records, groups, errors, callById, { fileName, sourceUrl })}
     <main class="rollout-main">
       ${renderHeader(records, errors, { fileName, sourceUrl, sessionFolderName: options.sessionFolderName })}
+      <div class="rollout-view-controls" role="group" aria-label="Rollout content display">
+        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-rollout-collapse-level-zero>Collapse L0</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-rollout-collapse-level-one>Collapse L1</button>
+        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-rollout-expand-level-one>Expand L1</button>
+      </div>
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
         ${groups.map(group => renderTurnGroupWithFinalAnswer(group, context)).join("")}
@@ -4883,7 +4704,7 @@ export function revealRolloutSearchResult(line) {
 function setRolloutDirectoryLevel(mode) {
   document.documentElement.dataset.rolloutRestoringState = "true";
   try {
-    document.querySelectorAll(".rollout-tree details, .rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
+    document.querySelectorAll(".rollout-turn, .rollout-assistant-section, .rollout-compact-section").forEach(node => {
       const level = Number(node.dataset.rolloutLevel || 0);
       if (mode === "collapse") {
         node.open = false;
@@ -4896,47 +4717,6 @@ function setRolloutDirectoryLevel(mode) {
   } finally {
     delete document.documentElement.dataset.rolloutRestoringState;
   }
-}
-
-function openSidebarRolloutTarget(anchor) {
-  const href = anchor?.getAttribute("href") || "";
-  if (!href.startsWith("#") || href.length <= 1) {
-    return false;
-  }
-  let targetId = href.slice(1);
-  try {
-    targetId = decodeURIComponent(targetId);
-  } catch {
-    // Keep the literal hash target when it is not URI encoded.
-  }
-  const sidebarGroup = anchor.closest('.rollout-tree details[data-rollout-level="1"][data-rollout-nav-target]');
-  const turn = sidebarGroup
-    ? document.getElementById(sidebarGroup.dataset.rolloutNavTarget || "")
-    : null;
-  if (turn instanceof HTMLDetailsElement) {
-    turn.open = true;
-    renderLazyTurn(turn);
-  }
-  const target = document.getElementById(targetId);
-  if (!target) {
-    return false;
-  }
-  const stateKeys = [turn]
-    .filter(node => node instanceof HTMLDetailsElement && node.dataset.rolloutStateKey)
-    .map(node => node.dataset.rolloutStateKey);
-  document.dispatchEvent(new CustomEvent("codex-rollout-navigation-open", {
-    detail: { stateKeys }
-  }));
-  try {
-    history.pushState(null, "", `#${encodeURIComponent(targetId)}`);
-  } catch {
-    location.hash = targetId;
-  }
-  const scroll = () => target.scrollIntoView({ behavior: "auto", block: "start" });
-  scroll();
-  requestAnimationFrame(scroll);
-  enhanceRenderedContent();
-  return true;
 }
 
 async function copyTextToClipboard(text) {
@@ -4982,11 +4762,6 @@ function initRolloutControls() {
   document.querySelector("[data-rollout-expand-level-one]")?.addEventListener("click", () => {
     setRolloutDirectoryLevel("expand-level-one");
   });
-  document.querySelector("[data-rollout-toggle-wrap]")?.addEventListener("click", event => {
-    const root = document.querySelector(".codex-rollout");
-    root?.classList.toggle("rollout-nav-wrap");
-    event.currentTarget.textContent = root?.classList.contains("rollout-nav-wrap") ? "Truncate" : "Wrap";
-  });
   document.addEventListener("toggle", event => {
     const details = event.target;
     if (!(details instanceof HTMLDetailsElement) || !details.open) {
@@ -5007,11 +4782,6 @@ function initRolloutControls() {
     enhanceRenderedContent();
   }, true);
   document.addEventListener("click", async event => {
-    const navLink = event.target.closest('.rollout-tree a[href^="#"]');
-    if (navLink && openSidebarRolloutTarget(navLink)) {
-      event.preventDefault();
-      return;
-    }
     const copyMarkdownButton = event.target.closest("[data-rollout-copy-markdown]");
     if (copyMarkdownButton) {
       event.preventDefault();
