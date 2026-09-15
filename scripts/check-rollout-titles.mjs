@@ -41,7 +41,7 @@ export async function checkRolloutTitles() {
     renderSortHeader: () => "", formatDateTime: () => "", renderStatsCell: () => "", workspaceIcon: () => "",
     document: {
       title: "Original browser title",
-      querySelector: selector => selector === ".rollout-hero h1" ? heading : table
+      querySelector: selector => selector === ".rollout-hero h1" ? heading : selector === ".standalone-table-wrap" ? table : null
     },
     installWorkspaceBar() { updates += 1; context.updateRenderedRolloutTitle(); },
     renderContentSearchResults() { searchUpdates += 1; }

@@ -7,6 +7,7 @@ import { checkContentSearch } from "./check-search.mjs";
 import { checkFileLinks } from "./check-file-links.mjs";
 import { checkWorkspace } from "./check-workspace.mjs";
 import { checkRolloutTitles } from "./check-rollout-titles.mjs";
+import { checkForks } from "./check-forks.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -883,5 +884,6 @@ await checkContentSearch();
 await checkFileLinks();
 await checkWorkspace();
 await checkRolloutTitles();
+await checkForks();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

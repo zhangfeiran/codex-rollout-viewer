@@ -1003,6 +1003,45 @@ body.codex-rollout-page {
   margin: 0 0 12px;
 }
 
+.rollout-fork-source {
+  display: grid;
+  gap: 6px;
+}
+
+.rollout-fork-link {
+  justify-self: start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--wh-rollout-border);
+  border-radius: 5px;
+  color: var(--wh-rollout-blue);
+  background: var(--wh-rollout-panel-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.rollout-fork-link:hover {
+  background: var(--wh-rollout-panel-strong);
+}
+
+.rollout-fork-feedback {
+  color: var(--wh-rollout-muted);
+  font-size: 12px;
+}
+
+.rollout-fork-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rollout-fork-source [hidden] {
+  display: none !important;
+}
+
 .rollout-tool-btn {
   flex: 0 0 auto;
   min-width: 0;
@@ -3201,6 +3240,13 @@ function getSessionMeta(records) {
   return records.find(record => record.value?.type === "session_meta")?.value?.payload ?? null;
 }
 
+function getRolloutForkSourceId(records) {
+  const session = getSessionMeta(records);
+  const id = typeof session?.forked_from_id === "string" ? session.forked_from_id.trim().toLowerCase() : "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+    && id !== String(session?.id || "").toLowerCase() ? id : "";
+}
+
 function getTurnId(record) {
   return record?.effectiveTurnId
     ?? record?.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
@@ -4363,6 +4409,7 @@ function renderKeyValueList(items) {
 
 function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
+  const forkSourceId = getRolloutForkSourceId(records);
   const stats = summarizeRecords(records, parseErrors);
   const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
   const chips = [
@@ -4381,6 +4428,14 @@ function renderHeader(records, parseErrors, options = {}) {
       <p class="rollout-subtitle">
         ${chips.map(chip => `<span class="rollout-chip">${escapeHtml(chip)}</span>`).join("")}
       </p>
+      ${forkSourceId ? `
+        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}">
+          <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">Forked from: <span data-fork-source-label>${escapeHtml(forkSourceId)}</span> ↗</button>
+          <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
+          <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
+          <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+        </div>
+      ` : ""}
     </header>
     <section class="rollout-stats" aria-label="Rollout summary">
       ${renderStat("Turns", formatNumber(stats.turns))}
@@ -6570,6 +6625,11 @@ export async function renderLocalCodexRolloutDocument() {
       const title = getCustomRolloutTitle(currentRenderedSource);
       heading.textContent = title || heading.dataset.defaultRolloutTitle;
       document.title = title || heading.dataset.defaultDocumentTitle;
+      const fork = document.querySelector("[data-rollout-fork-source]");
+      if (fork) {
+        const id = fork.dataset.rolloutForkSource;
+        fork.querySelector("[data-fork-source-label]").textContent = getCustomRolloutTitle({ rolloutId: id }) || id;
+      }
     }
 
     function refreshRolloutTitleViews() {
@@ -8967,6 +9027,155 @@ export async function renderLocalCodexRolloutDocument() {
       return true;
     }
 
+    async function readForkSourceItem(source, rolloutId) {
+      const item = await createRolloutIndexItem(source, 0);
+      return item && normalizeRolloutUuid(item.rolloutId || item.sessionId) === rolloutId ? item : null;
+    }
+
+    async function findForkSourceItem(rolloutId, preferredDirectoryId, isCurrent = () => true) {
+      const report = { item: null, blocked: [], unreadable: 0 };
+      const attempted = new Set();
+      const readCandidate = async source => {
+        const key = getSourceStateId(source);
+        if (!isCurrent() || attempted.has(key)) return null;
+        attempted.add(key);
+        try {
+          return await readForkSourceItem(source, rolloutId);
+        } catch {
+          report.unreadable += 1;
+          return null;
+        }
+      };
+      const indexed = rolloutIndex.find(item => normalizeRolloutUuid(item.rolloutId || item.sessionId)
+        === rolloutId || getSourceRolloutId(item.source) === rolloutId);
+      if (indexed && (report.item = await readCandidate(indexed.source))) return report;
+      if (!savedDirectoryEntries.length) savedDirectoryEntries = await getSavedDirectoryEntries();
+      const cache = await getSavedIndexCache();
+      const directories = [...savedDirectoryEntries].sort((a, b) => Number(b.id === preferredDirectoryId) - Number(a.id === preferredDirectoryId));
+      for (const entry of directories) {
+        if (!isCurrent()) return report;
+        if (!entry.handle || !await hasReadPermission(entry.handle)) {
+          if (entry.handle) report.blocked.push(entry);
+          continue;
+        }
+        const options = { directoryId: entry.id, directoryLabel: getDirectoryEntryLabel(entry) };
+        const cached = Object.values(getScopedIndexCache(cache, entry.id)).filter(item => item.isRollout
+          && normalizeRolloutUuid(item.rolloutId || item.sessionId) === rolloutId);
+        for (const item of cached) {
+          if (!isCurrent()) return report;
+          const path = item.path || item.name;
+          const handle = await getFileHandleByPath(entry.handle, path);
+          if (handle && (report.item = await readCandidate(createSourceFromFileHandle(handle, path, options)))) return report;
+        }
+        try {
+          const unnamed = [];
+          for await (const source of walkDirectoryHandle(entry.handle, "", options)) {
+            if (!isCurrent()) return report;
+            const id = getSourceRolloutId(source);
+            if (id === rolloutId && (report.item = await readCandidate(source))) return report;
+            if (!id) unnamed.push(source);
+          }
+          // Renamed JSONL files can only be identified from their session metadata.
+          for (const source of unnamed) {
+            if (!isCurrent()) return report;
+            if ((report.item = await readCandidate(source))) return report;
+          }
+        } catch {
+          report.unreadable += 1;
+        }
+      }
+      return report;
+    }
+
+    function showForkSourceStatus(root, message, blocked = null) {
+      const status = root.querySelector("[data-fork-source-status]");
+      status.textContent = message;
+      status.hidden = !message;
+      const actions = root.querySelector("[data-fork-source-actions]");
+      actions.hidden = blocked === null;
+      actions.innerHTML = blocked === null ? "" : `
+        ${blocked.map(entry => `<button class="rollout-tool-btn" type="button" data-fork-source-permission="${escapeAttribute(entry.id)}">Allow ${escapeHtml(getDirectoryEntryLabel(entry))}</button>`).join("")}
+        <button class="rollout-tool-btn" type="button" data-choose-fork-source>Choose source JSONL</button>
+      `;
+    }
+
+    async function openForkSourceRollout(root, permissionDirectoryId = "") {
+      const id = normalizeRolloutUuid(root?.dataset.rolloutForkSource);
+      if (!id || root.dataset.forkSourceBusy === "true") return;
+      const version = workspaceNavigationVersion;
+      const isCurrent = () => root.isConnected && activeWorkspaceViewKind === "rollout" && version === workspaceNavigationVersion;
+      root.dataset.forkSourceBusy = "true";
+      const button = root.querySelector("[data-open-fork-source]");
+      button.disabled = true;
+      showForkSourceStatus(root, "Finding source rollout…");
+      try {
+        if (permissionDirectoryId) {
+          const entry = getDirectoryEntryById(permissionDirectoryId);
+          if (!entry || !await requestReadPermission(entry.handle)) {
+            if (isCurrent()) showForkSourceStatus(root, "Folder permission was not granted. You can choose the source file directly.", entry ? [entry] : []);
+            return;
+          }
+        }
+        if (!isCurrent()) return;
+        const existing = getWorkspaceSlotByRolloutId(id);
+        if (existing) {
+          await activateWorkspaceSlot(existing.id);
+          return;
+        }
+        const report = await findForkSourceItem(id, currentRenderedSource?.directoryId || "", isCurrent);
+        if (!isCurrent()) return;
+        if (report.item) {
+          await openIndexedRolloutItem(report.item);
+          return;
+        }
+        showForkSourceStatus(root, report.unreadable
+          ? "Could not read the source rollout. Check folder access or choose the source JSONL."
+          : "Source rollout not found in readable sessions folders. Allow a folder below, add its sessions folder, or choose the source JSONL.", report.blocked);
+      } catch (error) {
+        if (isCurrent()) showForkSourceStatus(root, `Could not open source rollout: ${error?.message || error}`, []);
+      } finally {
+        root.dataset.forkSourceBusy = "false";
+        button.disabled = false;
+        if (root.isConnected && version !== workspaceNavigationVersion && activeWorkspaceViewKind === "rollout") {
+          showForkSourceStatus(root, "Source lookup stopped after the view changed. Click the source link to try again.", []);
+        }
+      }
+    }
+
+    async function openChosenForkSource(root, source) {
+      const id = normalizeRolloutUuid(root?.dataset.rolloutForkSource);
+      if (!id) return;
+      const version = workspaceNavigationVersion;
+      showForkSourceStatus(root, "Checking source rollout…");
+      try {
+        const item = await readForkSourceItem(source, id);
+        if (!root.isConnected || version !== workspaceNavigationVersion) return;
+        if (!item) {
+          showForkSourceStatus(root, "This file does not match the fork source. Choose the source rollout shown above.", []);
+          return;
+        }
+        await openIndexedRolloutItem(item);
+      } catch (error) {
+        if (root.isConnected && version === workspaceNavigationVersion) showForkSourceStatus(root, `Could not read source rollout: ${error?.message || error}`, []);
+      }
+    }
+
+    async function chooseForkSourceFile(root) {
+      if (!window.showOpenFilePicker) {
+        root.querySelector("[data-fork-source-file]").click();
+        return;
+      }
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          id: "codex-fork-source", multiple: false,
+          types: [{ description: "Codex rollout JSONL", accept: { "application/json": [".jsonl"] } }]
+        });
+        if (handle && root.isConnected) await openChosenForkSource(root, createSourceFromFileHandle(handle, handle.name));
+      } catch (error) {
+        if (error?.name !== "AbortError" && root.isConnected) showForkSourceStatus(root, `Could not choose source rollout: ${error?.message || error}`, []);
+      }
+    }
+
     async function renderIndexedRollout(id) {
       const item = rolloutIndex.find(candidate => candidate.id === id);
       await openIndexedRolloutItem(item);
@@ -9136,6 +9345,18 @@ export async function renderLocalCodexRolloutDocument() {
     window.addEventListener("storage", handleRolloutTitleStorageChange);
 
     document.addEventListener("click", async event => {
+      const forkRoot = event.target.closest("[data-rollout-fork-source]");
+      if (forkRoot) {
+        const permission = event.target.closest("[data-fork-source-permission]");
+        if (event.target.closest("[data-open-fork-source]") || permission) {
+          await openForkSourceRollout(forkRoot, permission?.dataset.forkSourcePermission || "");
+          return;
+        }
+        if (event.target.closest("[data-choose-fork-source]")) {
+          await chooseForkSourceFile(forkRoot);
+          return;
+        }
+      }
       if (event.target.closest("[data-toggle-workspace-tabs]")) {
         toggleWorkspaceTabs();
         return;
@@ -9260,7 +9481,12 @@ export async function renderLocalCodexRolloutDocument() {
     });
 
     document.addEventListener("change", event => {
-      if (event.target.matches("[data-workspace-auto-refresh]")) {
+      if (event.target.matches("[data-fork-source-file]")) {
+        const file = event.target.files?.[0];
+        const root = event.target.closest("[data-rollout-fork-source]");
+        event.target.value = "";
+        if (file && root) openChosenForkSource(root, createSourceFromFile(file));
+      } else if (event.target.matches("[data-workspace-auto-refresh]")) {
         const milliseconds = Number(event.target.value);
         if (AUTO_REFRESH_INTERVALS.includes(milliseconds)) {
           updateWorkspaceSlot(activeWorkspaceSlotId, {

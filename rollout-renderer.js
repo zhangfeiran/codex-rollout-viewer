@@ -173,6 +173,45 @@ body.codex-rollout-page {
   margin: 0 0 12px;
 }
 
+.rollout-fork-source {
+  display: grid;
+  gap: 6px;
+}
+
+.rollout-fork-link {
+  justify-self: start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--wh-rollout-border);
+  border-radius: 5px;
+  color: var(--wh-rollout-blue);
+  background: var(--wh-rollout-panel-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.rollout-fork-link:hover {
+  background: var(--wh-rollout-panel-strong);
+}
+
+.rollout-fork-feedback {
+  color: var(--wh-rollout-muted);
+  font-size: 12px;
+}
+
+.rollout-fork-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rollout-fork-source [hidden] {
+  display: none !important;
+}
+
 .rollout-tool-btn {
   flex: 0 0 auto;
   min-width: 0;
@@ -2371,6 +2410,13 @@ function getSessionMeta(records) {
   return records.find(record => record.value?.type === "session_meta")?.value?.payload ?? null;
 }
 
+function getRolloutForkSourceId(records) {
+  const session = getSessionMeta(records);
+  const id = typeof session?.forked_from_id === "string" ? session.forked_from_id.trim().toLowerCase() : "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+    && id !== String(session?.id || "").toLowerCase() ? id : "";
+}
+
 function getTurnId(record) {
   return record?.effectiveTurnId
     ?? record?.value?.payload?.internal_chat_message_metadata_passthrough?.turn_id
@@ -3533,6 +3579,7 @@ function renderKeyValueList(items) {
 
 function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
+  const forkSourceId = getRolloutForkSourceId(records);
   const stats = summarizeRecords(records, parseErrors);
   const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
   const chips = [
@@ -3551,6 +3598,14 @@ function renderHeader(records, parseErrors, options = {}) {
       <p class="rollout-subtitle">
         ${chips.map(chip => `<span class="rollout-chip">${escapeHtml(chip)}</span>`).join("")}
       </p>
+      ${forkSourceId ? `
+        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}">
+          <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">Forked from: <span data-fork-source-label>${escapeHtml(forkSourceId)}</span> ↗</button>
+          <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
+          <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
+          <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+        </div>
+      ` : ""}
     </header>
     <section class="rollout-stats" aria-label="Rollout summary">
       ${renderStat("Turns", formatNumber(stats.turns))}
