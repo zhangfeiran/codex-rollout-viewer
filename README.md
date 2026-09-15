@@ -16,7 +16,7 @@ Opening another rollout creates a separate session when the current session alre
 
 Vertical tabs are the recommended way to track multiple rollouts. Use Up/Down or Home/End to focus a tab, then Enter/Space to open it. The pane scrolls independently from the content; close buttons appear on the active, hovered, or focused tab. `Open JSONL` and `Add sessions folder` stay at the bottom.
 
-Rollout content uses the full area to the right of the tabs. The rollout outline has been removed. `Collapse L0`, `Collapse L1`, and `Expand L1` live above the turns; long tool outputs stay collapsed by default. Search, refresh, automatic refresh, bulk tab actions, and independent windows are available in the top toolbar.
+Rollout content uses the full area to the right of the tabs. The rollout outline has been removed. `Collapse L0`, `Collapse L1`, and `Expand L1` live in the top toolbar alongside search, refresh, automatic refresh, bulk tab actions, and independent windows. Long tool outputs stay collapsed by default.
 
 Search is available on all three views: `Sessions folders` searches every remembered folder with read permission; a folder page searches its rollouts (respecting the selected CWD); a rollout page searches that file. Use the search box or the toolbar's `Search` button. Searches match literal text without case sensitivity, including collapsed content, and show highlighted excerpts with source filenames and line numbers. Click a result to open its rollout and expand the matching record; records omitted from the normal view can be read as source text. Results are paginated in groups of 40.
 

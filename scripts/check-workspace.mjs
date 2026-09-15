@@ -7,7 +7,7 @@ export async function checkWorkspace() {
   const renderer = await readFile(new URL("../rollout-renderer.js", import.meta.url), "utf8");
   assert.doesNotMatch(html + renderer, /rollout-sidebar|renderSidebar|rollout-tree|openSidebarRolloutTarget|rollout-nav-wrap/, "the rollout outline must be removed, including styles and event handlers");
   assert.match(html, /role="tablist"[^>]*aria-orientation="vertical"/, "workspace navigation must expose vertical tabs");
-  assert.match(renderer, /<main class="rollout-main">[\s\S]*class="rollout-view-controls"[\s\S]*data-rollout-collapse-level-zero/, "content collapse controls must remain in the main column");
+  assert.match(renderer, /class="rollout-view-controls"[\s\S]*data-rollout-collapse-level-zero/, "the renderer must supply reusable content controls");
 
   const stored = new Map();
   let narrow = false;
@@ -105,11 +105,14 @@ export async function checkWorkspace() {
   let scrolls = 0;
   const focusCalls = [];
   const control = { matches: () => false, focus: () => focusCalls.push("refresh") };
+  const rolloutControls = {};
   const makeNode = () => ({
     dataset: {},
     tabs: { scrollTop: 0 },
+    actions: { prepend(node) { this.controls = node; } },
     setAttribute() {},
     querySelector(selector) {
+      if (selector === ".standalone-workspace-actions") return this.actions;
       return selector === ".standalone-workspace-tabs" ? this.tabs : { scrollIntoView: () => { scrolls += 1; } };
     },
     remove() { children.splice(children.indexOf(this), 1); }
@@ -120,6 +123,7 @@ export async function checkWorkspace() {
     getElementById: () => ({}),
     createElement: makeNode,
     querySelector(selector) {
+      if (selector === ".rollout-view-controls") return rolloutControls;
       return selector.startsWith("[data-workspace-key=") ? control
         : children.find(child => `.${child.className}` === selector) || null;
     },
@@ -134,6 +138,7 @@ export async function checkWorkspace() {
   });
   context.installWorkspaceBar();
   const bar = children[0];
+  assert.equal(children[1].actions.controls, undefined, "folder pages must not show rollout content controls");
   assert.equal(children.length, 3);
   assert.equal(children[2], content, "installing navigation preserves the visible content");
   assert.equal(scrolls, 1, "a newly installed pane reveals its active tab");
@@ -151,5 +156,8 @@ export async function checkWorkspace() {
   context.activeWorkspaceViewKind = "rollout";
   context.installWorkspaceBar();
   assert.equal(scrolls, 2, "switching views reveals the newly active tab");
+  assert.equal(children[1].actions.controls, rolloutControls, "rollout controls move into the top toolbar");
+  context.installWorkspaceBar();
+  assert.equal(children[1].actions.controls, rolloutControls, "toolbar refresh preserves the existing control nodes and their click handlers");
   console.log("Checked vertical tab selection, keyboard navigation, collapse persistence, focus, and independent pane scrolling.");
 }

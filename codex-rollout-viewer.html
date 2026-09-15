@@ -353,6 +353,16 @@
       align-items: center;
     }
 
+    .standalone-workspace-toolbar .rollout-view-controls {
+      gap: 4px;
+      margin: 0;
+    }
+
+    .standalone-workspace-toolbar .rollout-tool-btn {
+      min-height: 28px;
+      font: inherit;
+    }
+
     .standalone-workspace-action,
     .standalone-workspace-auto-refresh {
       min-height: 28px;
@@ -5371,9 +5381,9 @@ function renderDocument(records, errors, options = {}) {
     <main class="rollout-main">
       ${renderHeader(records, errors, { fileName, sourceUrl, sessionFolderName: options.sessionFolderName })}
       <div class="rollout-view-controls" role="group" aria-label="Rollout content display">
-        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-rollout-collapse-level-zero>Collapse L0</button>
-        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-rollout-collapse-level-one>Collapse L1</button>
-        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-rollout-expand-level-one>Expand L1</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-workspace-key="collapse-l0" data-rollout-collapse-level-zero>Collapse L0</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-workspace-key="collapse-l1" data-rollout-collapse-level-one>Collapse L1</button>
+        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-workspace-key="expand-l1" data-rollout-expand-level-one>Expand L1</button>
       </div>
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
@@ -6602,6 +6612,7 @@ export async function renderLocalCodexRolloutDocument() {
       document.documentElement.dataset.workspaceTabsCollapsed = String(workspaceTabsCollapsed);
       const previousBar = document.querySelector(".standalone-workspace-bar");
       const previousToolbar = document.querySelector(".standalone-workspace-toolbar");
+      const rolloutControls = document.querySelector(".rollout-view-controls");
       const scrollTop = previousBar?.querySelector(".standalone-workspace-tabs")?.scrollTop || 0;
       const focusedKey = document.activeElement?.dataset.workspaceKey;
       const activeKey = getActiveWorkspaceTabKey();
@@ -6642,6 +6653,9 @@ export async function renderLocalCodexRolloutDocument() {
           <button class="standalone-workspace-action" type="button" data-popout-workspace-slot data-workspace-key="popout" ${activeSlot ? "" : "disabled"} title="Clone this session into an independent window">New window</button>
         </div>
       `;
+      if (activeWorkspaceViewKind === "rollout" && rolloutControls) {
+        toolbar.querySelector(".standalone-workspace-actions").prepend(rolloutControls);
+      }
       previousBar?.remove();
       previousToolbar?.remove();
       document.body.prepend(bar, toolbar);

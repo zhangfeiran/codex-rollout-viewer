@@ -4578,9 +4578,9 @@ function renderDocument(records, errors, options = {}) {
     <main class="rollout-main">
       ${renderHeader(records, errors, { fileName, sourceUrl, sessionFolderName: options.sessionFolderName })}
       <div class="rollout-view-controls" role="group" aria-label="Rollout content display">
-        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-rollout-collapse-level-zero>Collapse L0</button>
-        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-rollout-collapse-level-one>Collapse L1</button>
-        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-rollout-expand-level-one>Expand L1</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse all turns" data-workspace-key="collapse-l0" data-rollout-collapse-level-zero>Collapse L0</button>
+        <button class="rollout-tool-btn" type="button" title="Collapse sections within open turns" data-workspace-key="collapse-l1" data-rollout-collapse-level-one>Collapse L1</button>
+        <button class="rollout-tool-btn" type="button" title="Expand turns and keep their sections collapsed" data-workspace-key="expand-l1" data-rollout-expand-level-one>Expand L1</button>
       </div>
       ${renderParseErrors(errors)}
       <section class="rollout-turn-list" aria-label="Rollout turns">
