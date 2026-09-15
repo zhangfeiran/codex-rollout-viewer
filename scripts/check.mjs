@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { checkContentSearch } from "./check-search.mjs";
 import { checkFileLinks } from "./check-file-links.mjs";
 import { checkWorkspace } from "./check-workspace.mjs";
+import { checkRolloutTitles } from "./check-rollout-titles.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -881,5 +882,6 @@ await checkMarkdownRendering();
 await checkContentSearch();
 await checkFileLinks();
 await checkWorkspace();
+await checkRolloutTitles();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

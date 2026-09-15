@@ -589,6 +589,33 @@
       border-bottom: 0;
     }
 
+    .standalone-rollout-title-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .standalone-rollout-title-row .standalone-rollout-title {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .standalone-rollout-title-edit {
+      display: flex;
+      flex: 0 0 auto;
+      padding: 3px;
+      border: 0;
+      border-radius: 4px;
+      color: var(--standalone-muted);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .standalone-rollout-title-edit:hover {
+      color: var(--standalone-blue);
+      background: var(--standalone-panel-strong);
+    }
+
     .standalone-sort-button {
       display: inline-flex;
       gap: 5px;
@@ -5890,6 +5917,7 @@ export async function renderLocalCodexRolloutDocument() {
     const ACTIVE_WORKSPACE_SLOT_KEY = createScopedStorageKey("active-workspace-slot-v1");
     const WORKSPACE_NAVIGATION_KEY = createScopedStorageKey("workspace-navigation-v1");
     const WORKSPACE_TABS_COLLAPSED_KEY = createScopedStorageKey("workspace-tabs-collapsed-v1");
+    const ROLLOUT_TITLE_KEY_PREFIX = `${createScopedStorageKey("rollout-title-v1")}:`;
     const DEFAULT_WORKSPACE_SLOT_ID = "default";
     const AUTO_REFRESH_INTERVALS = [0, 2000, 5000, 10000, 30000];
     const CONTENT_SEARCH_STATE_KEY = createScopedStorageKey("content-search-v1");
@@ -5968,6 +5996,7 @@ export async function renderLocalCodexRolloutDocument() {
       const cached = contentSearchCache.get(key);
       if (cached && Number.isFinite(metadata.size) && Number.isFinite(metadata.lastModified)
         && cached.size === metadata.size && cached.lastModified === metadata.lastModified) {
+        source.rolloutId = cached.rolloutId || getSourceRolloutId(source);
         contentSearchCache.delete(key);
         contentSearchCache.set(key, cached);
         return cached;
@@ -5977,9 +6006,11 @@ export async function renderLocalCodexRolloutDocument() {
         && current.metadata.size === metadata.size && current.metadata.lastModified === metadata.lastModified
         ? current.parsed : parseCodexRolloutJsonl(await source.getText());
       if (!isCodexRolloutRecords(parsed.records)) return null;
+      source.rolloutId = normalizeRolloutUuid(getSessionMeta(parsed.records)?.id) || getSourceRolloutId(source);
       const entries = createRolloutSearchEntries(parsed.records);
       const result = {
         ...metadata, entries,
+        rolloutId: source.rolloutId,
         title: getFirstUserTitle(parsed.records, source.name),
         parseErrors: parsed.errors.length,
         characters: entries.reduce((total, entry) => total + entry.text.length, 0)
@@ -6037,7 +6068,7 @@ export async function renderLocalCodexRolloutDocument() {
       const start = search.page * pageSize;
       search.root.querySelector("[data-search-results]").innerHTML = search.results.slice(start, start + pageSize).map((result, index) => `
         <button type="button" class="standalone-search-result" data-search-result="${start + index}">
-          <span class="standalone-search-result-meta">${escapeHtml([result.source.directoryLabel, result.title || result.source.name, result.source.path, result.label, `line ${result.line}`].filter(Boolean).join(" · "))}</span>
+          <span class="standalone-search-result-meta">${escapeHtml([result.source.directoryLabel, getRolloutDisplayTitle(result), result.source.path, result.label, `line ${result.line}`].filter(Boolean).join(" · "))}</span>
           <span>${escapeHtml(result.before)}<mark>${escapeHtml(result.match)}</mark>${escapeHtml(result.after)}</span>
         </button>
       `).join("");
@@ -6502,8 +6533,79 @@ export async function renderLocalCodexRolloutDocument() {
       return FOLDER_TAB_COLORS[Math.abs(hash) % FOLDER_TAB_COLORS.length];
     }
 
+    function getRolloutTitleStorageKey(target) {
+      const source = target?.source || target;
+      const rolloutId = normalizeRolloutUuid(target?.rolloutId)
+        || normalizeRolloutUuid(target?.sessionId)
+        || getSourceRolloutId(source)
+        || normalizeRolloutUuid(target?.sourceId);
+      const sourceId = target?.sourceId || getSourceStateId(source);
+      const identity = rolloutId ? `rollout:${rolloutId}` : sourceId ? `source:${sourceId}` : "";
+      return identity ? `${ROLLOUT_TITLE_KEY_PREFIX}${encodeURIComponent(identity)}` : "";
+    }
+
+    function getCustomRolloutTitle(target) {
+      const key = getRolloutTitleStorageKey(target);
+      try {
+        return key ? localStorage.getItem(key) || "" : "";
+      } catch {
+        return "";
+      }
+    }
+
+    function getRolloutDisplayTitle(item) {
+      return getCustomRolloutTitle(item) || item?.title || item?.name || item?.source?.name || "Rollout";
+    }
+
     function getWorkspaceTabLabel(slot) {
-      return slot.label || slot.directoryLabel || "Rollout";
+      return getCustomRolloutTitle(slot) || slot?.label || slot?.directoryLabel || "Rollout";
+    }
+
+    function updateRenderedRolloutTitle() {
+      if (activeWorkspaceViewKind !== "rollout" || !currentRenderedSource) return;
+      const heading = document.querySelector(".rollout-hero h1");
+      if (!heading) return;
+      heading.dataset.defaultRolloutTitle ??= heading.textContent;
+      heading.dataset.defaultDocumentTitle ??= document.title;
+      const title = getCustomRolloutTitle(currentRenderedSource);
+      heading.textContent = title || heading.dataset.defaultRolloutTitle;
+      document.title = title || heading.dataset.defaultDocumentTitle;
+    }
+
+    function refreshRolloutTitleViews() {
+      installWorkspaceBar();
+      if (activeWorkspaceViewKind === "index") {
+        const table = document.querySelector(".standalone-table-wrap");
+        if (table) {
+          const scrollLeft = table.scrollLeft;
+          table.outerHTML = renderRolloutTable(getFilteredIndexItems(rolloutIndex));
+          document.querySelector(".standalone-table-wrap").scrollLeft = scrollLeft;
+        }
+      }
+      if (currentContentSearch?.root.isConnected) renderContentSearchResults(currentContentSearch);
+    }
+
+    function editRolloutTitle(target) {
+      const key = getRolloutTitleStorageKey(target);
+      if (!key) return;
+      const original = target?.sourceId ? getWorkspaceTabLabel(target) : getRolloutDisplayTitle(target);
+      const input = window.prompt("Rollout title (leave empty to restore the original):", original);
+      if (input === null) return;
+      const title = input.trim();
+      try {
+        if (title) localStorage.setItem(key, title);
+        else localStorage.removeItem(key);
+      } catch (error) {
+        window.alert(`Could not save rollout title: ${error?.message || error}`);
+        return;
+      }
+      refreshRolloutTitleViews();
+    }
+
+    function handleRolloutTitleStorageChange(event) {
+      if (event.storageArea === localStorage && (event.key === null || event.key.startsWith(ROLLOUT_TITLE_KEY_PREFIX))) {
+        refreshRolloutTitleViews();
+      }
     }
 
     function readWorkspaceTabsCollapsed() {
@@ -6528,7 +6630,8 @@ export async function renderLocalCodexRolloutDocument() {
         folders: '<path d="M2 7V4a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1v2M2 8h16v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/>',
         folder: '<path d="M2 6a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/>',
         rollout: '<path d="M5 2h7l4 4v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm7 0v5h4M7 11h6m-6 3h4"/>',
-        plus: '<path d="M10 3v14M3 10h14"/>'
+        plus: '<path d="M10 3v14M3 10h14"/>',
+        edit: '<path d="m12 4 4 4M3 17l4-1L17 6a2.8 2.8 0 0 0-4-4L3 12Z"/>'
       };
       return `<svg class="standalone-workspace-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[kind] || paths.rollout}</svg>`;
     }
@@ -6610,6 +6713,7 @@ export async function renderLocalCodexRolloutDocument() {
       }
       document.documentElement.dataset.workspaceReady = "true";
       document.documentElement.dataset.workspaceTabsCollapsed = String(workspaceTabsCollapsed);
+      updateRenderedRolloutTitle();
       const previousBar = document.querySelector(".standalone-workspace-bar");
       const previousToolbar = document.querySelector(".standalone-workspace-toolbar");
       const rolloutControls = document.querySelector(".rollout-view-controls");
@@ -6643,6 +6747,7 @@ export async function renderLocalCodexRolloutDocument() {
         <div class="standalone-workspace-current" title="${escapeAttribute(activeTitle)}">${escapeHtml(activeTitle)}</div>
         <div class="standalone-workspace-actions" role="group" aria-label="Workspace actions">
           <button class="standalone-workspace-action" type="button" data-focus-content-search data-workspace-key="search">Search</button>
+          ${activeSlot?.sourceId ? `<button class="standalone-workspace-action" type="button" data-edit-current-rollout-title data-workspace-key="edit-title">Edit title</button>` : ""}
           ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index data-workspace-key="back-index" title="Return to the source folder tab">Back to index</button>` : ""}
           <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot data-workspace-key="refresh" ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
           <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh data-workspace-key="auto-refresh" title="Automatic refresh for this session" aria-label="Automatic refresh for this session" ${activeSlot ? "" : "disabled"}>
@@ -7607,7 +7712,7 @@ export async function renderLocalCodexRolloutDocument() {
         return item.cwd || "";
       }
       if (key === "title") {
-        return item.title || "";
+        return getRolloutDisplayTitle(item);
       }
       if (key === "file") {
         return item.name || "";
@@ -7681,7 +7786,10 @@ export async function renderLocalCodexRolloutDocument() {
               ${sortedItems.map(item => `
                 <tr>
                   <td class="standalone-cell-title">
-                    <button class="standalone-rollout-title" type="button" data-rollout-id="${escapeAttribute(item.id)}">${escapeHtml(item.title)}</button>
+                    <div class="standalone-rollout-title-row">
+                      <button class="standalone-rollout-title" type="button" data-rollout-id="${escapeAttribute(item.id)}">${escapeHtml(getRolloutDisplayTitle(item))}</button>
+                      <button class="standalone-rollout-title-edit" type="button" data-edit-rollout-title="${escapeAttribute(item.id)}" title="Edit title" aria-label="Edit title: ${escapeAttribute(getRolloutDisplayTitle(item))}">${workspaceIcon("edit")}</button>
+                    </div>
                     ${item.sessionId ? `<p class="standalone-rollout-subtitle">session ${escapeHtml(item.sessionId)}</p>` : ""}
                   </td>
                   <td class="standalone-cell-folder"><span class="standalone-path-text">${escapeHtml(item.folder)}</span></td>
@@ -8548,13 +8656,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     async function renameWorkspaceSlot(id) {
       const slot = getWorkspaceSlot(id);
-      if (!slot) {
-        return;
-      }
-      const label = window.prompt("Session label:", slot.label)?.trim();
-      if (label) {
-        await updateWorkspaceSlot(id, { label });
-      }
+      if (slot) editRolloutTitle(slot);
     }
 
     async function refreshWorkspaceSlot(id, options = {}) {
@@ -9031,10 +9133,21 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     document.addEventListener("keydown", handleWorkspaceTabKeydown);
+    window.addEventListener("storage", handleRolloutTitleStorageChange);
 
     document.addEventListener("click", async event => {
       if (event.target.closest("[data-toggle-workspace-tabs]")) {
         toggleWorkspaceTabs();
+        return;
+      }
+      const editTitleButton = event.target.closest("[data-edit-rollout-title]");
+      if (editTitleButton) {
+        editRolloutTitle(rolloutIndex.find(item => item.id === editTitleButton.dataset.editRolloutTitle));
+        return;
+      }
+      if (event.target.closest("[data-edit-current-rollout-title]")) {
+        const slot = activeWorkspaceViewKind === "rollout" ? getWorkspaceSlot() : null;
+        if (slot) editRolloutTitle(slot);
         return;
       }
       const restoreTabFocus = () => {

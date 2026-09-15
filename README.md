@@ -14,6 +14,8 @@ The left vertical tab pane tracks open folders and rollout files. Use its top-le
 
 Opening another rollout creates a separate session when the current session already has a file. Each session keeps its own file handle, view state, expanded/collapsed state, incremental parse cache, and automatic-refresh interval. Use `Refresh` for the active session, `Refresh all` for every tracked file, or select an automatic interval per session. `New window` clones the active session: the file and current state are inherited once, then the two windows save and refresh independently. Double-click a session tab to rename it.
 
+Use the pencil beside a rollout's title in the folder list, `Edit title` in the rollout toolbar, or double-click its tab to set a custom title. The list, tab, detail heading, browser title, and search results use that name. Titles are saved in this browser by rollout identity and survive refreshes, closing tabs, and reopening files; open viewer windows share title changes. Leave the title empty to restore the original. This changes the viewer's display title and does not edit or rename the JSONL file.
+
 Vertical tabs are the recommended way to track multiple rollouts. Use Up/Down or Home/End to focus a tab, then Enter/Space to open it. The pane scrolls independently from the content; close buttons appear on the active, hovered, or focused tab. `Open JSONL` and `Add sessions folder` stay at the bottom.
 
 Rollout content uses the full area to the right of the tabs. The rollout outline has been removed. `Collapse L0`, `Collapse L1`, and `Expand L1` live in the top toolbar alongside search, refresh, automatic refresh, bulk tab actions, and independent windows. Long tool outputs stay collapsed by default.

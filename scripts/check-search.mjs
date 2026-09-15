@@ -98,6 +98,8 @@ export async function checkContentSearch() {
     getSourceMetadata: source => source.getMetadata(),
     getSourceStateId: source => `${source?.directoryId || ""}::${source?.path || ""}`,
     getFirstUserTitle: () => "Fixture title", getWorkspaceSlot: () => ({ label: "Fixture rollout" }),
+    getSessionMeta: () => null, normalizeRolloutUuid: () => "", getSourceRolloutId: source => source?.rolloutId || "",
+    getRolloutDisplayTitle: item => item.title || item.source.name,
     getDirectoryEntryLabel: entry => entry.id,
     hasReadPermission: async handle => handle.allowed,
     async* walkDirectoryHandle(handle) { yield* handle.sources; },
