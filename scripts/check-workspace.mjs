@@ -18,6 +18,9 @@ export async function checkWorkspace() {
     activeWorkspaceViewKind: "folders",
     activeWorkspaceSlotId: "slot-b",
     openDirectoryTabIds: new Set(["folder-a"]),
+    collapsedWorkspaceFolderIds: new Set(),
+    lastVisibleWorkspaceTabKey: "",
+    saveWorkspaceNavigation() {},
     selectedDirectoryEntry: { id: "folder-a" },
     workspaceSlots: [
       { id: "slot-a", label: 'One <script> & "quoted"', directoryId: "folder-a", hasUpdates: true },
@@ -31,7 +34,8 @@ export async function checkWorkspace() {
     updateRenderedRolloutTitle() {},
     CSS: { escape: value => value }
   });
-  for (const name of ["escapeHtml", "escapeAttribute", "getWorkspaceTabLabel", "readWorkspaceTabsCollapsed", "toggleWorkspaceTabs", "workspaceIcon", "getActiveWorkspaceTabKey", "renderWorkspaceTabs", "handleWorkspaceTabKeydown", "focusWorkspaceControl", "installWorkspaceBar", "formatWorkspaceRefreshOption"]) {
+  context.getWorkspaceSlot = (id = context.activeWorkspaceSlotId) => context.workspaceSlots.find(slot => slot.id === id);
+  for (const name of ["escapeHtml", "escapeAttribute", "getWorkspaceTabLabel", "readWorkspaceTabsCollapsed", "toggleWorkspaceTabs", "workspaceIcon", "getActiveWorkspaceTabKey", "getVisibleWorkspaceTabKey", "workspaceTabAttributes", "getWorkspaceFolderGroups", "renderWorkspaceRolloutTab", "renderWorkspaceFolderGroup", "setWorkspaceFolderCollapsed", "getVisibleWorkspaceTabs", "renderWorkspaceTabs", "handleWorkspaceTabKeydown", "focusWorkspaceControl", "installWorkspaceBar", "formatWorkspaceRefreshOption"]) {
     const indent = name.startsWith("escape") ? "" : "    ";
     const match = html.match(new RegExp(`^${indent}function ${name}\\([^]*?\\n${indent}\\}`, "m"));
     assert.ok(match, `Missing ${name}`);
@@ -84,11 +88,16 @@ export async function checkWorkspace() {
   let focused = -1;
   const tabs = Array.from({ length: 3 }, (_, index) => ({
     tabIndex: index === 0 ? 0 : -1,
-    closest() { return this; },
+    dataset: { workspaceKey: `tab:${index}` },
+    closest(selector) { return selector === '[hidden]' ? null : this; },
+    matches: () => true,
     focus() { focused = index; },
     scrollIntoView() {}
   }));
-  context.document = { querySelectorAll: () => tabs };
+  context.document = {
+    querySelectorAll: () => tabs,
+    querySelector: selector => tabs.find(tab => selector.includes(tab.dataset.workspaceKey))
+  };
   for (const [index, key, expected] of [[0, "ArrowUp", 2], [2, "ArrowDown", 0], [1, "Home", 0], [1, "End", 2]]) {
     let prevented = false;
     context.handleWorkspaceTabKeydown({ target: tabs[index], key, preventDefault() { prevented = true; } });
@@ -106,7 +115,7 @@ export async function checkWorkspace() {
   children.push(content);
   let scrolls = 0;
   const focusCalls = [];
-  const control = { matches: () => false, focus: () => focusCalls.push("refresh") };
+  const control = { closest: () => null, matches: () => false, focus: () => focusCalls.push("refresh") };
   const rolloutControls = {};
   const makeNode = () => ({
     dataset: {},
@@ -136,7 +145,7 @@ export async function checkWorkspace() {
     workspaceTabsCollapsed: false,
     AUTO_REFRESH_INTERVALS: [0, 2000],
     currentRenderedSource: null,
-    getWorkspaceSlot: () => slots[1]
+    getWorkspaceSlot: (id = context.activeWorkspaceSlotId) => context.workspaceSlots.find(slot => slot.id === id)
   });
   context.installWorkspaceBar();
   const bar = children[0];
@@ -161,5 +170,21 @@ export async function checkWorkspace() {
   assert.equal(children[1].actions.controls, rolloutControls, "rollout controls move into the top toolbar");
   context.installWorkspaceBar();
   assert.equal(children[1].actions.controls, rolloutControls, "toolbar refresh preserves the existing control nodes and their click handlers");
+  context.activeWorkspaceSlotId = "slot-a";
+  context.lastVisibleWorkspaceTabKey = "";
+  context.collapsedWorkspaceFolderIds.add("folder-a");
+  context.installWorkspaceBar();
+  assert.equal(context.collapsedWorkspaceFolderIds.has("folder-a"), true, "initial rollout render honors the restored collapsed folder");
+  context.installWorkspaceBar();
+  assert.equal(context.collapsedWorkspaceFolderIds.has("folder-a"), true, "background refresh cannot expand the active folder");
+  context.activeWorkspaceSlotId = "slot-b";
+  context.installWorkspaceBar();
+  context.activeWorkspaceSlotId = "slot-a";
+  context.installWorkspaceBar();
+  assert.equal(context.collapsedWorkspaceFolderIds.has("folder-a"), false, "navigating to another rollout reveals its folder");
+  context.setWorkspaceFolderCollapsed("folder-a", true);
+  context.installWorkspaceBar();
+  assert.equal(context.collapsedWorkspaceFolderIds.has("folder-a"), true, "manual collapse stays closed while its rollout remains active");
+  assert.equal(children[2], content, "folder collapse preserves rollout content and its state");
   console.log("Checked vertical tab selection, keyboard navigation, collapse persistence, focus, and independent pane scrolling.");
 }

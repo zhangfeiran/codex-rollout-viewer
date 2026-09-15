@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { checkContentSearch } from "./check-search.mjs";
 import { checkFileLinks } from "./check-file-links.mjs";
 import { checkWorkspace } from "./check-workspace.mjs";
+import { checkWorkspaceGroups } from "./check-workspace-groups.mjs";
 import { checkRolloutTitles } from "./check-rollout-titles.mjs";
 import { checkForks } from "./check-forks.mjs";
 
@@ -119,7 +120,7 @@ async function checkLocalHtml(fileName) {
   await tabReuseContext.testRenderIndexedRollout("rollout-row");
   assert.deepEqual(activatedSlotIds, ["existing-slot"], "an indexed rollout already open in a tab must activate that tab");
   assert.equal(tabReuseContext.workspaceSlots.length, 1, "reopening an indexed rollout must not create a duplicate tab");
-  assert.match(bootScript, /getFolderTabColor\(entry\.id\)/, "folder tabs must use stable folder colors");
+  assert.match(bootScript, /getFolderTabColor\(id\)/, "folder tabs must use stable folder colors");
   assert.match(bootScript, /directoryId: source\.directoryId \|\| ""/, "restored rollout slots must refresh their folder identity from the source");
   assert.match(bootScript, /sessionFolderName: source\.directoryLabel \|\| ""/, "rollout detail rendering must receive its sessions-folder name");
   assert.match(bootScript, /rolloutId: normalizeRolloutUuid\(slot\?\.rolloutId\)/, "workspace slots must persist the rollout UUID separately from their internal storage id");
@@ -883,6 +884,7 @@ await checkMarkdownRendering();
 await checkContentSearch();
 await checkFileLinks();
 await checkWorkspace();
+await checkWorkspaceGroups();
 await checkRolloutTitles();
 await checkForks();
 
