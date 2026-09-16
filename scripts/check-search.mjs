@@ -167,6 +167,54 @@ export async function checkContentSearch() {
   context.renderContentSearchResults(current);
   assert.equal((current.root.querySelector("[data-search-results]").innerHTML.match(/data-search-result=/g) || []).length, 5, "pagination must retain matches beyond the first page");
 
+  const readOrder = [];
+  const orderedSources = [10, 30, 20, 20, null].map((lastModified, index) => {
+    const source = makeSource(`ordered-${index}`, asJsonl([fixture[0], message("user", "ordering-match")]));
+    source.lastModified = lastModified;
+    source.getText = async () => { readOrder.push(index); return source.text; };
+    return source;
+  });
+  const unreadable = makeSource("unreadable");
+  unreadable.getMetadata = async () => { throw new Error("File unavailable"); };
+  context.rolloutIndex = [...orderedSources, unreadable].map(source => ({ source, modifiedAt: 999, cwd: "/a" }));
+  context.savedDirectoryEntries = [
+    { id: "first", handle: { allowed: true, sources: [orderedSources[0], orderedSources[1], orderedSources[4], unreadable] } },
+    { id: "second", handle: { allowed: true, sources: [orderedSources[2], orderedSources[3]] } }
+  ];
+  for (const view of ["index", "folders"]) {
+    context.activeWorkspaceViewKind = view;
+    context.contentSearchCache.clear();
+    context.contentSearchCacheSize = 0;
+    readOrder.length = 0;
+    current = search("ordering-match");
+    await context.runContentSearch(current);
+    const expected = view === "index" ? [1, 2, 3, 0, 4] : [0, 1, 2, 3, 4];
+    assert.deepEqual(readOrder, expected, `${view} search must read content newest first across the whole scope, preserving ties and placing unknown dates last`);
+    assert.deepEqual(Array.from(current.results, result => orderedSources.indexOf(result.source)), expected, "results must follow file scan order");
+    assert.match(current.root.querySelector("[data-search-status]").textContent, /1 unreadable files skipped/);
+    orderedSources[0].lastModified = 40;
+  }
+  assert.equal(context.rolloutIndex[0].source, orderedSources[0], "search sorting must not reorder the folder index");
+
+  let releaseMetadata;
+  let signalMetadata;
+  const metadataStarted = new Promise(resolve => { signalMetadata = resolve; });
+  const slowMetadata = makeSource("slow-metadata");
+  slowMetadata.getMetadata = async () => {
+    signalMetadata();
+    await new Promise(resolve => { releaseMetadata = resolve; });
+    return { lastModified: 1, size: slowMetadata.size };
+  };
+  context.activeWorkspaceViewKind = "rollout";
+  context.currentRenderedSource = slowMetadata;
+  current = search(literal);
+  const preparing = context.runContentSearch(current);
+  await metadataStarted;
+  current.run += 1;
+  releaseMetadata();
+  await preparing;
+  assert.equal(slowMetadata.reads, 0, "cancelling during modification-time lookup must stop before reading content");
+
   let release;
   let signalStart;
   const started = new Promise(resolve => { signalStart = resolve; });
@@ -183,7 +231,7 @@ export async function checkContentSearch() {
   assert.equal(current.results.length, 0);
   assert.equal(current.root.querySelector("[data-search-status]").textContent, "New search owns this view", "a superseded search must not overwrite newer results");
 
-  console.log("Checked search categories, literal matching, full text, scope isolation, cache invalidation, permissions, cancellation, escaping, and pagination.");
+  console.log("Checked search categories, literal matching, full text, scope isolation, newest-first scan order, cache invalidation, permissions, cancellation, escaping, and pagination.");
 }
 
 async function checkRealRollout(fileName) {

@@ -6243,11 +6243,8 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function* getContentSearchSources(scope, report, isCurrent) {
-      if (scope.sources) {
-        yield* scope.sources;
-        return;
-      }
-      for (const directory of scope.directories) {
+      const items = [...(scope.sources || [])];
+      for (const directory of scope.directories || []) {
         if (!isCurrent()) return;
         if (!directory.handle || !await hasReadPermission(directory.handle)) {
           report.blocked.push(directory);
@@ -6258,11 +6255,30 @@ export async function renderLocalCodexRolloutDocument() {
             directoryId: directory.id, directoryLabel: getDirectoryEntryLabel(directory)
           })) {
             if (!isCurrent()) return;
-            yield { source };
+            items.push({ source });
           }
         } catch {
           report.failedFolders.push(getDirectoryEntryLabel(directory));
         }
+      }
+      // Sort the entire scope before reading content, including across folders.
+      const ordered = [];
+      for (const item of items) {
+        if (!isCurrent()) return;
+        let lastModified = 0;
+        try {
+          const metadata = await getSourceMetadata(item.source);
+          if (Number.isFinite(metadata.lastModified)) lastModified = metadata.lastModified;
+        } catch {
+          // Still try searching this file; the scan reports unreadable files.
+        }
+        if (!isCurrent()) return;
+        ordered.push({ item, lastModified });
+      }
+      ordered.sort((a, b) => b.lastModified - a.lastModified);
+      for (const { item } of ordered) {
+        if (!isCurrent()) return;
+        yield item;
       }
     }
 
@@ -6308,7 +6324,7 @@ export async function renderLocalCodexRolloutDocument() {
       const matchedFiles = new Set();
       let scanned = 0;
       let lastPaint = 0;
-      status.textContent = "Searching…";
+      status.textContent = "Preparing search… sorting files by modification time (newest first).";
       try {
         for await (const item of getContentSearchSources(search.scope, report, isCurrent)) {
           if (!isCurrent()) return;
