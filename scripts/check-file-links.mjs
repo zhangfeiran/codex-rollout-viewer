@@ -102,7 +102,7 @@ export async function checkFileLinks(realFile) {
     saveWorkspaceNavigation: async () => {}, updateWorkspaceSlot: async () => {},
     getWorkspaceSlot: () => ({}), getSavedCurrentRolloutUiState: async () => null,
     restoreRenderedUiState() {}, ensureRenderedUiStatePersistenceInstalled() {},
-    installWorkspaceBar() {}, installContentSearch() {}, scrollToDocumentEndSoon() {}
+    installWorkspaceBar() {}, restoreInlineForkPreviews() {}, installContentSearch() {}, scrollToDocumentEndSoon() {}
   });
   vm.runInContext(html.match(/    async function renderSource\([^]*?\n    \}/)[0], context);
   const source = { directoryId: "b", name: "rollout.jsonl", path: "rollout.jsonl" };

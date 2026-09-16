@@ -8,6 +8,8 @@ import { checkFileLinks } from "./check-file-links.mjs";
 import { checkWorkspace } from "./check-workspace.mjs";
 import { checkWorkspaceGroups } from "./check-workspace-groups.mjs";
 import { checkRolloutTitles } from "./check-rollout-titles.mjs";
+import { checkReopen } from "./check-reopen.mjs";
+import { checkInlineForks } from "./check-inline-forks.mjs";
 import { checkForks } from "./check-forks.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
@@ -160,6 +162,7 @@ async function checkLocalHtml(fileName) {
     workspaceNavigationVersion: 0,
     currentRenderedSource: {},
     currentRenderedUiState: {},
+    async rememberClosedWorkspaceTabs() { return true; },
     async persistCurrentRenderedUiState() {},
     clearActiveWorkspaceSlotSelection() {},
     async saveWorkspaceSlots() {},
@@ -887,5 +890,7 @@ await checkWorkspace();
 await checkWorkspaceGroups();
 await checkRolloutTitles();
 await checkForks();
+await checkReopen();
+await checkInlineForks();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

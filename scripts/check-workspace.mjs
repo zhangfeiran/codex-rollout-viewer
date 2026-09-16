@@ -17,6 +17,8 @@ export async function checkWorkspace() {
     window: { matchMedia: () => ({ matches: narrow }) },
     activeWorkspaceViewKind: "folders",
     activeWorkspaceSlotId: "slot-b",
+    closedWorkspaceTabs: [],
+    reopeningWorkspaceTabs: false,
     openDirectoryTabIds: new Set(["folder-a"]),
     collapsedWorkspaceFolderIds: new Set(),
     lastVisibleWorkspaceTabKey: "",

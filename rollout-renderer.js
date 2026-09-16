@@ -178,6 +178,31 @@ body.codex-rollout-page {
   gap: 6px;
 }
 
+.rollout-fork-preview {
+  min-width: 0;
+  border: 1px solid var(--wh-rollout-border);
+  border-radius: 6px;
+  background: var(--wh-rollout-bg);
+}
+
+.rollout-fork-preview > summary {
+  padding: 8px 10px;
+  color: var(--wh-rollout-blue);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.rollout-fork-preview-body {
+  padding: 10px;
+  min-width: 0;
+  border-top: 1px solid var(--wh-rollout-border);
+}
+
+.rollout-fork-preview-body .rollout-hero h1 {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
 .rollout-fork-link {
   justify-self: start;
   max-width: 100%;
@@ -3581,7 +3606,7 @@ function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
   const forkSourceId = getRolloutForkSourceId(records);
   const stats = summarizeRecords(records, parseErrors);
-  const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
+  const title = options.title || (session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl));
   const chips = [
     options.sessionFolderName ? `Session folder: ${options.sessionFolderName}` : null,
     session?.cwd,
@@ -3599,11 +3624,15 @@ function renderHeader(records, parseErrors, options = {}) {
         ${chips.map(chip => `<span class="rollout-chip">${escapeHtml(chip)}</span>`).join("")}
       </p>
       ${forkSourceId ? `
-        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}">
+        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}" data-fork-ancestors="${escapeAttribute(JSON.stringify(options.forkAncestors || [session?.id].filter(Boolean)))}" data-fork-directory-id="${escapeAttribute(options.directoryId || "")}">
           <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">Forked from: <span data-fork-source-label>${escapeHtml(forkSourceId)}</span> ↗</button>
           <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
           <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
           <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+          <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(forkSourceId)}">
+            <summary>Source rollout · expand / collapse</summary>
+            <div class="rollout-fork-preview-body" data-fork-preview-body></div>
+          </details>
         </div>
       ` : ""}
     </header>
@@ -4570,6 +4599,35 @@ function createMeta(name, content) {
   meta.setAttribute("name", name);
   meta.setAttribute("content", content);
   return meta;
+}
+
+// Inline sources share the lazy stores, but use their own DOM and view-state keys.
+// The prefix is stable for the fork chain so refresh can restore its open state.
+export function renderInlineCodexRollout(parsed, options = {}) {
+  const records = createRenderableRecords(parsed?.records || []);
+  const prefix = `fork-${(options.forkAncestors || []).join("-")}:`;
+  const scope = html => html.replace(/(\s(?:id|data-rollout-state-key|data-rollout-body-id))="([^"]*)"/g,
+    (_, attribute, value) => `${attribute}="${escapeAttribute(prefix)}${value}"`);
+  const previousDrive = markdownLinkDrive;
+  markdownLinkDrive = normalizeMarkdownLinkDrive(options.markdownLinkDrive);
+  try {
+    const callById = new Map();
+    for (const record of records) {
+      const payload = record.value?.payload;
+      if (record.value?.type === "response_item" && isFunctionCallPayloadType(payload?.type) && payload.call_id) {
+        callById.set(payload.call_id, payload);
+      }
+    }
+    const turns = buildGroups(records).map(group => renderTurnGroupWithFinalAnswer(group, { callById })).join("");
+    // Only turn bodies contain generated markup. Raw code/diff/Markdown stays byte-for-byte intact.
+    for (const match of turns.matchAll(/data-rollout-lazy-turn data-rollout-lazy-key="([^"]+)"/g)) {
+      lazyRolloutContentStore.set(match[1], scope(lazyRolloutContentStore.get(match[1]) || ""));
+    }
+    return scope(`${renderHeader(records, parsed?.errors || [], options)}${renderParseErrors(parsed?.errors || [])}
+      <section class="rollout-turn-list" aria-label="Source rollout turns">${turns}</section>`);
+  } finally {
+    markdownLinkDrive = previousDrive;
+  }
 }
 
 function renderDocument(records, errors, options = {}) {

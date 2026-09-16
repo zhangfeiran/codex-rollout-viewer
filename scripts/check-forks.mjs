@@ -141,6 +141,10 @@ export async function checkForks(realFile) {
     assert.ok(meta.forked_from_id, "the real fixture must contain fork metadata");
     const rendered = context.renderHeader(context.createRenderableRecords(parsed.records), [], { fileName: realFile });
     assert.ok(rendered.includes(`data-rollout-fork-source="${meta.forked_from_id}"`));
+    const inline = context.renderInlineCodexRollout(parsed, { fileName: realFile, forkAncestors: [meta.id] });
+    assert.ok(inline.includes(`data-rollout-fork-source="${meta.forked_from_id}"`));
+    assert.match(inline, /data-fork-preview/);
+    assert.doesNotMatch(inline, /id="turn-1"/);
     console.log(`Validated real fork rollout: ${parsed.records.length} records, source ${meta.forked_from_id}.`);
   }
   console.log("Checked fork metadata, source identity, folder lookup, permissions, new tabs, cancellation, and manual source selection.");

@@ -131,6 +131,7 @@ export async function checkWorkspaceGroups() {
   const deleted = [];
   let folderRenders = 0;
   const persisted = [];
+  context.rememberClosedWorkspaceTabs = async () => true;
   context.persistCurrentRenderedUiState = async id => { persisted.push(id); };
   context.saveWorkspaceSlots = async () => {};
   context.deleteWorkspaceSlotState = async id => { deleted.push(id); };

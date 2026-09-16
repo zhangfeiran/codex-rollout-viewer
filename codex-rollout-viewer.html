@@ -449,6 +449,7 @@
       font: inherit;
     }
 
+    .standalone-workspace-add:disabled,
     .standalone-workspace-action:disabled,
     .standalone-workspace-auto-refresh:disabled {
       cursor: default;
@@ -1091,6 +1092,31 @@ body.codex-rollout-page {
 .rollout-fork-source {
   display: grid;
   gap: 6px;
+}
+
+.rollout-fork-preview {
+  min-width: 0;
+  border: 1px solid var(--wh-rollout-border);
+  border-radius: 6px;
+  background: var(--wh-rollout-bg);
+}
+
+.rollout-fork-preview > summary {
+  padding: 8px 10px;
+  color: var(--wh-rollout-blue);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.rollout-fork-preview-body {
+  padding: 10px;
+  min-width: 0;
+  border-top: 1px solid var(--wh-rollout-border);
+}
+
+.rollout-fork-preview-body .rollout-hero h1 {
+  font-size: 16px;
+  overflow-wrap: anywhere;
 }
 
 .rollout-fork-link {
@@ -4496,7 +4522,7 @@ function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
   const forkSourceId = getRolloutForkSourceId(records);
   const stats = summarizeRecords(records, parseErrors);
-  const title = session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl);
+  const title = options.title || (session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl));
   const chips = [
     options.sessionFolderName ? `Session folder: ${options.sessionFolderName}` : null,
     session?.cwd,
@@ -4514,11 +4540,15 @@ function renderHeader(records, parseErrors, options = {}) {
         ${chips.map(chip => `<span class="rollout-chip">${escapeHtml(chip)}</span>`).join("")}
       </p>
       ${forkSourceId ? `
-        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}">
+        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}" data-fork-ancestors="${escapeAttribute(JSON.stringify(options.forkAncestors || [session?.id].filter(Boolean)))}" data-fork-directory-id="${escapeAttribute(options.directoryId || "")}">
           <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">Forked from: <span data-fork-source-label>${escapeHtml(forkSourceId)}</span> ↗</button>
           <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
           <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
           <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+          <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(forkSourceId)}">
+            <summary>Source rollout · expand / collapse</summary>
+            <div class="rollout-fork-preview-body" data-fork-preview-body></div>
+          </details>
         </div>
       ` : ""}
     </header>
@@ -5487,6 +5517,35 @@ function createMeta(name, content) {
   return meta;
 }
 
+// Inline sources share the lazy stores, but use their own DOM and view-state keys.
+// The prefix is stable for the fork chain so refresh can restore its open state.
+export function renderInlineCodexRollout(parsed, options = {}) {
+  const records = createRenderableRecords(parsed?.records || []);
+  const prefix = `fork-${(options.forkAncestors || []).join("-")}:`;
+  const scope = html => html.replace(/(\s(?:id|data-rollout-state-key|data-rollout-body-id))="([^"]*)"/g,
+    (_, attribute, value) => `${attribute}="${escapeAttribute(prefix)}${value}"`);
+  const previousDrive = markdownLinkDrive;
+  markdownLinkDrive = normalizeMarkdownLinkDrive(options.markdownLinkDrive);
+  try {
+    const callById = new Map();
+    for (const record of records) {
+      const payload = record.value?.payload;
+      if (record.value?.type === "response_item" && isFunctionCallPayloadType(payload?.type) && payload.call_id) {
+        callById.set(payload.call_id, payload);
+      }
+    }
+    const turns = buildGroups(records).map(group => renderTurnGroupWithFinalAnswer(group, { callById })).join("");
+    // Only turn bodies contain generated markup. Raw code/diff/Markdown stays byte-for-byte intact.
+    for (const match of turns.matchAll(/data-rollout-lazy-turn data-rollout-lazy-key="([^"]+)"/g)) {
+      lazyRolloutContentStore.set(match[1], scope(lazyRolloutContentStore.get(match[1]) || ""));
+    }
+    return scope(`${renderHeader(records, parsed?.errors || [], options)}${renderParseErrors(parsed?.errors || [])}
+      <section class="rollout-turn-list" aria-label="Source rollout turns">${turns}</section>`);
+  } finally {
+    markdownLinkDrive = previousDrive;
+  }
+}
+
 function renderDocument(records, errors, options = {}) {
   lazyRolloutContentStore = new Map();
   rawMessageMarkdownStore = new Map();
@@ -6054,6 +6113,8 @@ export async function renderLocalCodexRolloutDocument() {
     const CURRENT_ROLLOUT_RENDER_CACHE_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
     const RENDER_CACHE_VERSION = 2;
     const WORKSPACE_SLOTS_KEY = createScopedStorageKey("workspace-slots-v1");
+    const CLOSED_WORKSPACE_TABS_KEY = createScopedStorageKey("closed-workspace-tabs-v1");
+    const CLOSED_WORKSPACE_TABS_LIMIT = 20;
     const ACTIVE_WORKSPACE_SLOT_KEY = createScopedStorageKey("active-workspace-slot-v1");
     const WORKSPACE_NAVIGATION_KEY = createScopedStorageKey("workspace-navigation-v1");
     const WORKSPACE_TABS_COLLAPSED_KEY = createScopedStorageKey("workspace-tabs-collapsed-v1");
@@ -6083,6 +6144,8 @@ export async function renderLocalCodexRolloutDocument() {
     let isRestoringRenderedUiState = false;
     let renderedUiStatePersistenceInstalled = false;
     let workspaceSlots = [];
+    let closedWorkspaceTabs = [];
+    let reopeningWorkspaceTabs = false;
     let activeWorkspaceSlotId = DEFAULT_WORKSPACE_SLOT_ID;
     let workspaceInitialized = false;
     let workspaceTabsCollapsed = readWorkspaceTabsCollapsed();
@@ -6628,6 +6691,8 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     async function initializeWorkspace() {
+      const closed = await getStoredValue(CLOSED_WORKSPACE_TABS_KEY);
+      closedWorkspaceTabs = Array.isArray(closed) ? closed.filter(entry => Array.isArray(entry?.slots)).slice(-CLOSED_WORKSPACE_TABS_LIMIT) : [];
       const stored = await getStoredValue(WORKSPACE_SLOTS_KEY);
       workspaceSlots = (Array.isArray(stored) ? stored.map(normalizeWorkspaceSlot) : [])
         .filter(slot => !(slot.id === DEFAULT_WORKSPACE_SLOT_ID && slot.label === "Default" && !slot.sourceId));
@@ -6725,6 +6790,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     function refreshRolloutTitleViews() {
       installWorkspaceBar();
+      updateInlineForkTitles();
       if (activeWorkspaceViewKind === "index") {
         const table = document.querySelector(".standalone-table-wrap");
         if (table) {
@@ -6985,6 +7051,7 @@ export async function renderLocalCodexRolloutDocument() {
         </div>
         <div class="standalone-workspace-new">
           <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input data-workspace-file-input hidden>
+          <button class="standalone-workspace-add" type="button" data-reopen-workspace-tab data-workspace-key="reopen-tab" title="${escapeAttribute(closedWorkspaceTabs.length ? `Reopen: ${closedWorkspaceTabs.at(-1).label} (Ctrl+Shift+T)` : "No recently closed tabs")}" ${closedWorkspaceTabs.length && !reopeningWorkspaceTabs ? "" : "disabled"}>${workspaceIcon("rollout")}<span>Reopen tab${closedWorkspaceTabs.length ? ` (${closedWorkspaceTabs.length})` : ""}</span></button>
           <button class="standalone-workspace-add" type="button" data-open-jsonl-file data-workspace-key="open-jsonl" title="Open JSONL" aria-label="Open JSONL">${workspaceIcon("plus")}<span>Open JSONL</span></button>
           <button class="standalone-workspace-add" type="button" data-open-sessions-directory data-workspace-key="add-folder" title="Add sessions folder" aria-label="Add sessions folder">${workspaceIcon("folder")}<span>Add sessions folder</span></button>
         </div>
@@ -8822,6 +8889,91 @@ export async function renderLocalCodexRolloutDocument() {
       await renderActiveWorkspaceView({ requestPermission: true });
     }
 
+    async function rememberClosedWorkspaceTabs(slots, directoryId = "", navigationVersion = workspaceNavigationVersion) {
+      const snapshots = await Promise.all(slots.map(async slot => ({
+        slot: { ...slot, refreshState: "idle" },
+        index: workspaceSlots.indexOf(slot),
+        source: await getSavedCurrentRollout(slot.id),
+        uiState: await getSavedCurrentRolloutUiState(slot.id),
+        view: await getSavedCurrentView(slot.id)
+      })));
+      if (navigationVersion !== workspaceNavigationVersion) return false;
+      const entry = {
+        slots: snapshots, directoryId,
+        label: directoryId ? getDirectoryEntryLabel(getDirectoryEntryById(directoryId) || { label: slots[0]?.directoryLabel || "Sessions folder" })
+          : slots.length === 1 ? getWorkspaceTabLabel(slots[0]) : `${slots.length} rollout tabs`,
+        activeSlotId: slots.some(slot => slot.id === activeWorkspaceSlotId) ? activeWorkspaceSlotId : slots.at(-1)?.id || "",
+        viewKind: directoryId && activeWorkspaceViewKind === "index" ? "index" : "rollout",
+        collapsed: collapsedWorkspaceFolderIds.has(directoryId),
+        closedAt: Date.now()
+      };
+      const evicted = closedWorkspaceTabs.slice(0, Math.max(0, closedWorkspaceTabs.length + 1 - CLOSED_WORKSPACE_TABS_LIMIT));
+      closedWorkspaceTabs = [...closedWorkspaceTabs, entry].slice(-CLOSED_WORKSPACE_TABS_LIMIT);
+      await putStoredValue(CLOSED_WORKSPACE_TABS_KEY, closedWorkspaceTabs);
+      if (navigationVersion !== workspaceNavigationVersion || slots.some(slot => !workspaceSlots.includes(slot))) {
+        closedWorkspaceTabs = [...evicted, ...closedWorkspaceTabs.filter(candidate => candidate !== entry)].slice(-CLOSED_WORKSPACE_TABS_LIMIT);
+        await putStoredValue(CLOSED_WORKSPACE_TABS_KEY, closedWorkspaceTabs);
+        installWorkspaceBar();
+        return false;
+      }
+      return true;
+    }
+
+    async function reopenClosedWorkspaceTab() {
+      if (reopeningWorkspaceTabs || !closedWorkspaceTabs.length) return;
+      reopeningWorkspaceTabs = true;
+      installWorkspaceBar();
+      const entry = closedWorkspaceTabs.at(-1);
+      try {
+        const navigationVersion = await leaveActiveRolloutView();
+        if (navigationVersion !== workspaceNavigationVersion) return;
+        const restored = new Map();
+        for (const snapshot of entry.slots) {
+          const existing = workspaceSlots.find(slot => slot.id === snapshot.slot.id
+            || (slot.sourceId && slot.sourceId === snapshot.slot.sourceId));
+          if (existing) {
+            restored.set(snapshot.slot.id, existing.id);
+            continue;
+          }
+          const slot = normalizeWorkspaceSlot({ ...snapshot.slot, nextRefreshAt: 0 }, workspaceSlots.length);
+          await saveCurrentRollout(snapshot.source, slot.id);
+          await saveCurrentRolloutUiState(snapshot.uiState, slot.id);
+          await saveCurrentView(snapshot.view, slot.id);
+          workspaceSlots.splice(Math.max(0, Math.min(snapshot.index, workspaceSlots.length)), 0, slot);
+          restored.set(snapshot.slot.id, slot.id);
+        }
+        if (entry.directoryId && getDirectoryEntryById(entry.directoryId)) {
+          openDirectoryTabIds.add(entry.directoryId);
+          if (entry.collapsed) collapsedWorkspaceFolderIds.add(entry.directoryId);
+          else collapsedWorkspaceFolderIds.delete(entry.directoryId);
+        }
+        await saveWorkspaceSlots({ render: false });
+        closedWorkspaceTabs = closedWorkspaceTabs.filter(candidate => candidate !== entry);
+        await putStoredValue(CLOSED_WORKSPACE_TABS_KEY, closedWorkspaceTabs);
+        if (navigationVersion !== workspaceNavigationVersion) return;
+        if (entry.directoryId && (entry.viewKind === "index" || !entry.slots.length)) {
+          await openDirectoryTab(entry.directoryId);
+        } else {
+          const id = restored.get(entry.activeSlotId) || restored.values().next().value;
+          if (id) await activateWorkspaceSlot(id);
+        }
+        await saveWorkspaceNavigation();
+      } catch (error) {
+        window.alert(`Could not reopen closed tabs: ${error?.message || error}`);
+      } finally {
+        reopeningWorkspaceTabs = false;
+        installWorkspaceBar();
+      }
+    }
+
+    function handleReopenWorkspaceTabKeydown(event) {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "t"
+          && closedWorkspaceTabs.length) {
+        event.preventDefault();
+        void reopenClosedWorkspaceTab();
+      }
+    }
+
     async function deleteWorkspaceSlotState(id) {
       const keys = [
         LEGACY_CURRENT_ROLLOUT_KEY,
@@ -8841,15 +8993,28 @@ export async function renderLocalCodexRolloutDocument() {
       if (index < 0) {
         return;
       }
+      const navigationVersion = workspaceNavigationVersion;
+      const closingSlot = workspaceSlots[index];
       const wasSelectedSlot = id === activeWorkspaceSlotId;
       const wasVisible = activeWorkspaceViewKind === "rollout" && wasSelectedSlot;
       if (wasVisible) {
         await persistCurrentRenderedUiState(id);
+      }
+      if (!await rememberClosedWorkspaceTabs([closingSlot], "", navigationVersion)) return;
+      if (wasVisible) {
+        workspaceNavigationVersion += 1;
         currentRenderedSource = null;
         currentRenderedUiState = null;
       }
-      workspaceSlots.splice(index, 1);
+      workspaceSlots = workspaceSlots.filter(slot => slot.id !== id);
+      const closeNavigationVersion = workspaceNavigationVersion;
       await deleteWorkspaceSlotState(id);
+      if (closeNavigationVersion !== workspaceNavigationVersion) {
+        await saveWorkspaceSlots({ render: false });
+        await saveWorkspaceNavigation();
+        installWorkspaceBar();
+        return;
+      }
       if (!workspaceSlots.length) {
         clearActiveWorkspaceSlotSelection();
         await saveWorkspaceSlots({ render: false });
@@ -8884,9 +9049,12 @@ export async function renderLocalCodexRolloutDocument() {
       }
       const wasVisible = activeWorkspaceViewKind === "rollout"
         && slotIds.includes(activeWorkspaceSlotId);
-      workspaceNavigationVersion += 1;
+      const navigationVersion = ++workspaceNavigationVersion;
       if (wasVisible) {
         await persistCurrentRenderedUiState(activeWorkspaceSlotId);
+      }
+      if (!await rememberClosedWorkspaceTabs(workspaceSlots, "", navigationVersion)) return;
+      if (wasVisible) {
         currentRenderedSource = null;
         currentRenderedUiState = null;
       }
@@ -8894,7 +9062,7 @@ export async function renderLocalCodexRolloutDocument() {
       clearActiveWorkspaceSlotSelection();
       await saveWorkspaceSlots({ render: false });
       await Promise.all(slotIds.map(deleteWorkspaceSlotState));
-      if (wasVisible) {
+      if (wasVisible && navigationVersion === workspaceNavigationVersion) {
         await renderDirectorySelectionPage();
         return;
       }
@@ -9206,6 +9374,7 @@ export async function renderLocalCodexRolloutDocument() {
       ensureRenderedUiStatePersistenceInstalled();
       installWorkspaceBar();
       installContentSearch();
+      restoreInlineForkPreviews();
       if (searchSelection) {
         const input = document.querySelector("[data-search-query]");
         input.focus({ preventScroll: true });
@@ -9288,9 +9457,109 @@ export async function renderLocalCodexRolloutDocument() {
       `;
     }
 
+    function getForkSourceAncestors(root) {
+      try {
+        const ids = JSON.parse(root.dataset.forkAncestors || "[]");
+        return Array.isArray(ids) ? ids.map(normalizeRolloutUuid).filter(Boolean) : [];
+      } catch { return []; }
+    }
+
+    function restoreInlineForkPreviews(root = document) {
+      root.querySelectorAll("details[data-fork-preview][open]").forEach(details => {
+        void expandForkSourceInline(details.closest("[data-rollout-fork-source]"));
+      });
+    }
+
+    async function expandForkSourceInline(root, permissionDirectoryId = "", suppliedItem = null) {
+      const id = normalizeRolloutUuid(root?.dataset.rolloutForkSource);
+      const details = root?.querySelector("[data-fork-preview]");
+      if (!id || !details?.open || root.dataset.forkSourceBusy === "true" || details.dataset.loaded === "true") return;
+      root.dataset.forkSourceMode = "inline";
+      const ancestors = getForkSourceAncestors(root);
+      if (ancestors.includes(id)) {
+        showForkSourceStatus(root, "This fork source is already in the expanded ancestry chain. Use its tab link to open it separately.");
+        return;
+      }
+      const slotId = activeWorkspaceSlotId;
+      const isCurrent = () => root.isConnected && details.open && activeWorkspaceViewKind === "rollout" && slotId === activeWorkspaceSlotId;
+      root.dataset.forkSourceBusy = "true";
+      showForkSourceStatus(root, "Loading source rollout…");
+      try {
+        if (permissionDirectoryId) {
+          const entry = getDirectoryEntryById(permissionDirectoryId);
+          if (!entry || !await requestReadPermission(entry.handle)) {
+            if (isCurrent()) showForkSourceStatus(root, "Folder permission was not granted. You can choose the source file directly.", entry ? [entry] : []);
+            return;
+          }
+        }
+        let item = suppliedItem;
+        const existing = getWorkspaceSlotByRolloutId(id);
+        if (!item && existing) {
+          try {
+            const source = await resolveSavedRolloutSource(await getSavedCurrentRollout(existing.id));
+            if (source) item = await readForkSourceItem(source, id);
+          } catch {}
+        }
+        if (!isCurrent()) return;
+        if (!item) {
+          const report = await findForkSourceItem(id, root.dataset.forkDirectoryId || currentRenderedSource?.directoryId || "", isCurrent);
+          if (!isCurrent()) return;
+          item = report.item;
+          if (!item) {
+            showForkSourceStatus(root, report.unreadable ? "Could not read the source rollout. Allow folder access or choose its JSONL."
+              : "Source rollout not found. Allow folder access or choose its JSONL.", report.blocked);
+            return;
+          }
+        }
+        const parsed = parseCompleteJsonlText(await item.source.getText());
+        if (!isCurrent()) return;
+        if (normalizeRolloutUuid(getSessionMeta(parsed.records)?.id) !== id) {
+          showForkSourceStatus(root, "This file does not match the fork source. Choose the source rollout shown above.", []);
+          return;
+        }
+        const body = root.querySelector("[data-fork-preview-body]");
+        body.dataset.inlineRolloutId = id;
+        body.innerHTML = renderInlineCodexRollout(parsed, {
+          fileName: item.source.name, sourceUrl: item.source.path || item.source.name,
+          sessionFolderName: item.source.directoryLabel, directoryId: item.source.directoryId,
+          forkAncestors: [...ancestors, id],
+          markdownLinkDrive: getDirectoryEntryById(item.source.directoryId)?.markdownLinkDrive || ""
+        });
+        details.dataset.loaded = "true";
+        showForkSourceStatus(root, "");
+        if (currentRenderedUiState) {
+          applySavedRenderedUiState(body);
+          body.querySelectorAll("details[open][data-rollout-lazy-turn]").forEach(renderLazyTurn);
+          applySavedRenderedUiState(body);
+        }
+        updateInlineForkTitles();
+        restoreInlineForkPreviews(body);
+        await enhanceRenderedContent();
+      } catch (error) {
+        if (isCurrent()) showForkSourceStatus(root, `Could not load source rollout: ${error?.message || error}`, []);
+      } finally {
+        root.dataset.forkSourceBusy = "false";
+        if (!details.open && details.dataset.loaded !== "true") showForkSourceStatus(root, "");
+      }
+    }
+
+    function updateInlineForkTitles() {
+      document.querySelectorAll("[data-rollout-fork-source]").forEach(root => {
+        const id = root.dataset.rolloutForkSource;
+        root.querySelector("[data-fork-source-label]").textContent = getCustomRolloutTitle({ rolloutId: id }) || id;
+      });
+      document.querySelectorAll("[data-inline-rollout-id]").forEach(body => {
+        const heading = body.querySelector(".rollout-hero h1");
+        if (!heading) return;
+        heading.dataset.defaultRolloutTitle ??= heading.textContent;
+        heading.textContent = getCustomRolloutTitle({ rolloutId: body.dataset.inlineRolloutId }) || heading.dataset.defaultRolloutTitle;
+      });
+    }
+
     async function openForkSourceRollout(root, permissionDirectoryId = "") {
       const id = normalizeRolloutUuid(root?.dataset.rolloutForkSource);
       if (!id || root.dataset.forkSourceBusy === "true") return;
+      root.dataset.forkSourceMode = "tab";
       const version = workspaceNavigationVersion;
       const isCurrent = () => root.isConnected && activeWorkspaceViewKind === "rollout" && version === workspaceNavigationVersion;
       root.dataset.forkSourceBusy = "true";
@@ -9311,7 +9580,7 @@ export async function renderLocalCodexRolloutDocument() {
           await activateWorkspaceSlot(existing.id);
           return;
         }
-        const report = await findForkSourceItem(id, currentRenderedSource?.directoryId || "", isCurrent);
+        const report = await findForkSourceItem(id, root.dataset.forkDirectoryId || currentRenderedSource?.directoryId || "", isCurrent);
         if (!isCurrent()) return;
         if (report.item) {
           await openIndexedRolloutItem(report.item);
@@ -9343,7 +9612,8 @@ export async function renderLocalCodexRolloutDocument() {
           showForkSourceStatus(root, "This file does not match the fork source. Choose the source rollout shown above.", []);
           return;
         }
-        await openIndexedRolloutItem(item);
+        if (root.dataset.forkSourceMode === "inline") await expandForkSourceInline(root, "", item);
+        else await openIndexedRolloutItem(item);
       } catch (error) {
         if (root.isConnected && version === workspaceNavigationVersion) showForkSourceStatus(root, `Could not read source rollout: ${error?.message || error}`, []);
       }
@@ -9431,6 +9701,7 @@ export async function renderLocalCodexRolloutDocument() {
         || (activeWorkspaceViewKind === "rollout" && slotIds.includes(activeWorkspaceSlotId));
       const navigationVersion = wasVisible ? await leaveActiveRolloutView() : workspaceNavigationVersion;
       if (navigationVersion !== workspaceNavigationVersion) return;
+      if (!await rememberClosedWorkspaceTabs(workspaceSlots.filter(slot => slotIds.includes(slot.id)), id, navigationVersion)) return;
       openDirectoryTabIds.delete(id);
       collapsedWorkspaceFolderIds.delete(id);
       workspaceSlots = workspaceSlots.filter(slot => !slotIds.includes(slot.id));
@@ -9541,15 +9812,29 @@ export async function renderLocalCodexRolloutDocument() {
       await renderDirectorySelectionPage();
     }
 
+    document.addEventListener("toggle", event => {
+      if (event.target.matches?.("details[data-fork-preview]") && event.target.open) {
+        void expandForkSourceInline(event.target.closest("[data-rollout-fork-source]"));
+      }
+    }, true);
     document.addEventListener("keydown", handleWorkspaceTabKeydown);
+    document.addEventListener("keydown", handleReopenWorkspaceTabKeydown);
     window.addEventListener("storage", handleRolloutTitleStorageChange);
 
     document.addEventListener("click", async event => {
+      if (event.target.closest("[data-reopen-workspace-tab]")) {
+        await reopenClosedWorkspaceTab();
+        return;
+      }
       const forkRoot = event.target.closest("[data-rollout-fork-source]");
       if (forkRoot) {
         const permission = event.target.closest("[data-fork-source-permission]");
         if (event.target.closest("[data-open-fork-source]") || permission) {
-          await openForkSourceRollout(forkRoot, permission?.dataset.forkSourcePermission || "");
+          if (permission && forkRoot.dataset.forkSourceMode === "inline") {
+            await expandForkSourceInline(forkRoot, permission.dataset.forkSourcePermission);
+          } else {
+            await openForkSourceRollout(forkRoot, permission?.dataset.forkSourcePermission || "");
+          }
           return;
         }
         if (event.target.closest("[data-choose-fork-source]")) {
