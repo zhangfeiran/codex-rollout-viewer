@@ -410,6 +410,7 @@ body.codex-rollout-page {
   min-width: 0;
 }
 
+.rollout-temporary-diff-turn,
 .rollout-final-answer-turn {
   width: calc(100% - 28px);
   margin-left: 28px;
@@ -419,15 +420,18 @@ body.codex-rollout-page {
   background: rgba(63, 185, 80, 0.025);
 }
 
+.rollout-temporary-diff-turn > summary,
 .rollout-final-answer-turn > summary {
   padding: 6px 9px;
   background: rgba(63, 185, 80, 0.07);
 }
 
+.rollout-temporary-diff-turn .rollout-turn-title h2,
 .rollout-final-answer-turn .rollout-turn-title h2 {
   font-size: 13px;
 }
 
+.rollout-temporary-diff-turn .rollout-turn-meta,
 .rollout-final-answer-turn .rollout-turn-meta {
   font-size: 10px;
 }
@@ -1184,6 +1188,7 @@ pre + .rollout-kv,
     display: none;
   }
 
+  .rollout-temporary-diff-turn,
   .rollout-final-answer-turn {
     width: calc(100% - 12px);
     margin-left: 12px;
@@ -4028,6 +4033,29 @@ function buildGroupFinalAnswer(group) {
   };
 }
 
+function buildGroupTemporaryDiff(group) {
+  // A steer chain shares one summary, placed after its latest user turn.
+  if (group.isPreamble || group.steerChildren?.length) {
+    return null;
+  }
+  const records = getSteerChainSummaryRecords(group);
+  if (records.some(isFinalAnswerRecord)) {
+    return null;
+  }
+  const patchFiles = getRecordsPatchFiles(records);
+  if (!patchFiles.length) {
+    return null;
+  }
+  return {
+    id: `temporary-diff-${group.id}`,
+    title: "Temporary diff summary",
+    records: [],
+    patchFiles,
+    groupIndex: group.index,
+    temporary: true
+  };
+}
+
 function isFinalAnswerRecord(record) {
   return !isLocalCompactSummaryRecord(record)
     && isAgentOutputRecord(record)
@@ -4519,23 +4547,23 @@ function renderCompactSection(section, context) {
   `;
 }
 
-function renderFinalAnswerSection(section, context) {
+function renderTurnSummarySection(section, context) {
   const finalRecord = section.records[0];
   const stats = getPatchStats(section.patchFiles);
   const patchRecord = {
-    line: `${finalRecord.line}-final-summary`
+    line: section.temporary ? section.id : `${finalRecord.line}-final-summary`
   };
   return `
-    <details class="rollout-turn rollout-final-answer-turn" id="${escapeAttribute(section.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
+    <details class="rollout-turn ${section.temporary ? "rollout-temporary-diff-turn" : "rollout-final-answer-turn"}" id="${escapeAttribute(section.id)}" data-rollout-level="1" data-rollout-body-id="${escapeAttribute(section.id)}" data-rollout-state-key="${escapeAttribute(section.id)}:body">
       <summary>
         <div class="rollout-turn-title">
           <h2><span class="rollout-directory-patch-stats">${section.patchFiles.length ? renderPatchLineStats(stats.additions, stats.deletions) : ""}</span><span class="rollout-turn-heading-text">${escapeHtml(`${section.groupIndex}. ${section.title}`)}</span></h2>
-          <p class="rollout-turn-meta"><span>final_answer</span><span>${formatNumber(section.patchFiles.length)} changed files</span></p>
+          <p class="rollout-turn-meta"><span>${section.temporary ? "No final answer yet" : "final_answer"}</span><span>${formatNumber(section.patchFiles.length)} changed files</span></p>
         </div>
         <span class="rollout-count">${formatNumber(section.patchFiles.length)} changed files</span>
       </summary>
       <div class="rollout-turn-body">
-        ${renderRecord(finalRecord, context)}
+        ${finalRecord ? renderRecord(finalRecord, context) : ""}
         ${section.patchFiles.length ? `
           <section class="rollout-final-changes" data-rollout-diff-scope>
             <div class="rollout-exec-command-head">
@@ -4590,8 +4618,8 @@ function renderTurnGroup(group, context) {
 }
 
 function renderTurnGroupWithFinalAnswer(group, context) {
-  const finalAnswer = buildGroupFinalAnswer(group);
-  return `${renderTurnGroup(group, context)}${finalAnswer ? renderFinalAnswerSection(finalAnswer, context) : ""}`;
+  const summary = buildGroupFinalAnswer(group) || buildGroupTemporaryDiff(group);
+  return `${renderTurnGroup(group, context)}${summary ? renderTurnSummarySection(summary, context) : ""}`;
 }
 
 function createMeta(name, content) {

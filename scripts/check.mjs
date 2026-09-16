@@ -243,7 +243,7 @@ async function checkMarkdownRendering() {
     .replace(/import\.meta\.url/g, JSON.stringify("file:///codex-rollout-viewer/rollout-renderer.js"));
   const rendererContext = { console };
   vm.runInNewContext(
-    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderFinalAnswerSection, renderFunctionCall, renderGroupSection, renderHeader, renderMarkdownContent, renderMessage, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
+    `${runnableRenderer}\nglobalThis.__rolloutTest = { buildGroupTemporaryDiff, buildGroupFinalAnswer, buildGroupSections, buildGroups, createRenderableRecords, getGitDiffText, getReadableToolOutput, getRecordsPatchFiles, getRecordsPatchStats, getSteerParentTurnIds, isFinalAnswerRecord, parseExecCommandCalls, parseExecToolNames, parseExecWrapperOutput, parseNestedToolArguments, parsePatchApplyEndChanges, parseStructuredToolOutput, renderAssistantSection, renderEvent, renderTurnSummarySection, renderFunctionCall, renderGroupSection, renderHeader, renderMarkdownContent, renderMessage, renderToolCallGroup, renderTurnGroup, renderTurnGroupWithFinalAnswer, renderWordDiffPair, setRolloutDirectoryLevel };`,
     rendererContext,
     { filename: "rollout-renderer.js" }
   );
@@ -678,7 +678,7 @@ async function checkMarkdownRendering() {
   ])[0];
   assert.equal(missingHunkPatchFile.changeType, "add", "missing hunk data must fall back without losing the file lifecycle");
   assert.equal(missingHunkPatchFile.deletions, 1, "missing hunk data must not be mistaken for a fully reverted file");
-  const finalHtml = rendererContext.__rolloutTest.renderFinalAnswerSection({ ...finalSection, patchFiles: repeatedPatchFiles }, { callById: new Map() });
+  const finalHtml = rendererContext.__rolloutTest.renderTurnSummarySection({ ...finalSection, patchFiles: repeatedPatchFiles }, { callById: new Map() });
   assert.match(finalHtml, /1\. Finished result More details[\s\S]*final_answer[\s\S]*Finished result[\s\S]*More details[\s\S]*Changed files/, "final sections must collapse the full body into a one-line title and render the original answer before changed files");
   assert.match(finalHtml, /class="rollout-turn rollout-final-answer-turn"[\s\S]*data-rollout-level="1"/, "final sections must render as level-one turn siblings");
   assert.doesNotMatch(finalHtml, /rollout-assistant-section|data-rollout-level="2"/, "final sections must not use the nested assistant-section structure");
@@ -691,6 +691,41 @@ async function checkMarkdownRendering() {
   assert.match(repeatedGitDiff, /-old value\n-before\n\+new value\n\+after/, "copied final diffs must contain the composed net changes for a repeatedly edited file");
   const turnPairHtml = rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(completedGroups[0], { callById: new Map() });
   assert.match(turnPairHtml, /id="turn-1"[\s\S]*<details class="rollout-turn rollout-final-answer-turn" id="final-49"/, "the final section must follow its user turn as a sibling");
+
+  const temporaryDiff = rendererContext.__rolloutTest.buildGroupTemporaryDiff;
+  const runningGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords.filter(record => record.line <= 43));
+  assert.deepEqual(Array.from(temporaryDiff(runningGroups[0]).patchFiles, file => file.path), ["src/old.js"], "a running turn must expose its changes before final_answer");
+  const interruptedGroups = rendererContext.__rolloutTest.buildGroups([
+    ...completedTurnRecords.filter(record => record.line <= 44),
+    { line: 45, value: { type: "event_msg", payload: { type: "turn_aborted", turn_id: "turn-original" } } }
+  ]);
+  assert.ok(temporaryDiff(interruptedGroups[0]), "task_complete and interruption without final_answer must retain a temporary diff");
+  const unfinishedSteerGroups = rendererContext.__rolloutTest.buildGroups(completedTurnRecords.filter(record => record.line < 49));
+  assert.equal(temporaryDiff(unfinishedSteerGroups[0]), null, "an unfinished steer chain must not duplicate summaries under its parent");
+  const temporarySection = temporaryDiff(unfinishedSteerGroups[1]);
+  assert.deepEqual(Array.from(temporarySection.patchFiles, file => file.path), ["src/old.js", "src/steer.js"], "the latest steer must summarize patches across the unfinished chain");
+  const temporaryHtml = unfinishedSteerGroups.map(group => rendererContext.__rolloutTest.renderTurnGroupWithFinalAnswer(group, { callById: new Map() })).join("");
+  assert.equal((temporaryHtml.match(/class="rollout-turn rollout-temporary-diff-turn"/g) || []).length, 1, "an unfinished chain must render exactly one temporary summary");
+  assert.match(temporaryHtml, /id="turn-2"[\s\S]*<details class="rollout-turn rollout-temporary-diff-turn"[^>]*data-rollout-level="1"[^>]*>[\s\S]*Temporary diff summary[\s\S]*No final answer yet[\s\S]*Changed files/, "temporary summaries must follow the latest user turn as level-one siblings with an explicit provisional label");
+  assert.doesNotMatch(temporaryHtml, /<details class="rollout-turn rollout-temporary-diff-turn"[^>]*\bopen\b|rollout-final-answer-turn/, "temporary summaries must start collapsed and must not masquerade as final answers");
+  assert.equal((temporaryHtml.match(/rollout-copy-file-diff/g) || []).length, 2, "temporary summaries must retain per-file copying");
+  assert.match(temporaryHtml, /data-rollout-copy-diff=[\s\S]*data-rollout-diff-mode="split"/, "temporary summaries must retain aggregate copying and diff view controls");
+  for (const groups of [completedGroups, steerOwnedGroups]) {
+    assert.ok(groups.every(group => temporaryDiff(group) === null), "a final answer owned by either the parent or steer must replace the temporary summary");
+  }
+  assert.equal(temporaryDiff(rendererContext.__rolloutTest.buildGroups(completedTurnRecords.filter(record => record.line < 43))[0]), null, "turns without changes must not display an empty temporary summary");
+  assert.equal(temporaryDiff({ isPreamble: true, records: [] }), null, "preamble records must not create a temporary summary");
+  const compactPendingGroups = rendererContext.__rolloutTest.buildGroups([
+    ...completedTurnRecords.filter(record => record.line <= 43),
+    localCompactSummary
+  ]);
+  assert.ok(temporaryDiff(compactPendingGroups[0]), "a local compaction handoff must not suppress the temporary diff");
+  const nextTaskGroups = rendererContext.__rolloutTest.buildGroups([
+    ...steerOwnedTurnRecords,
+    { line: 50, value: { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Next task" }], internal_chat_message_metadata_passthrough: { turn_id: "next-task" } } } },
+    { line: 51, value: { type: "event_msg", payload: { type: "patch_apply_end", turn_id: "next-task", success: true, changes: { "src/next.js": patchChanges["src/added.js"] } } } }
+  ]);
+  assert.deepEqual(Array.from(temporaryDiff(nextTaskGroups.at(-1)).patchFiles, file => file.path), ["src/next.js"], "a later unfinished task must not include earlier completed changes");
 
   const execInput = [
     "const results = await Promise.all([",
