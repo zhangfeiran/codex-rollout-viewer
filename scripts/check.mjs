@@ -882,7 +882,53 @@ async function checkMarkdownRendering() {
       { line: 51, value: { timestamp: "2026-07-17T00:00:02.000Z", type: "event_msg", payload: { type: "task_complete", duration_ms: 2000 } } }
     ]
   }, { callById: new Map() });
-  assert.match(timedTurnHtml, /rollout-turn-meta">\s*<span>2s<\/span>\s*<span>2 events<\/span>/, "turn duration must appear before event and call counts");
+  assert.match(timedTurnHtml, /rollout-turn-meta">\s*<span>2s<\/span>[\s\S]*?<span>2 events<\/span>/, "turn duration must appear before event and call counts");
+  assert.match(timedTurnHtml, /Model: Unknown[\s\S]*Reasoning: Unknown/, "missing model settings must remain explicitly unknown");
+
+  const modelUser = (line, turnId, text) => ({ line, value: { type: "response_item", payload: {
+    type: "message", role: "user", content: [{ type: "input_text", text }],
+    internal_chat_message_metadata_passthrough: { turn_id: turnId }
+  } } });
+  const modelContext = (line, turnId, settings) => ({ line, value: { type: "turn_context", payload: { turn_id: turnId, ...settings } } });
+  const modelThreadSettings = (line, settings) => ({ line, value: { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: settings } } });
+  const modelGroups = rendererContext.__rolloutTest.buildGroups(rendererContext.__rolloutTest.createRenderableRecords([
+    modelThreadSettings(1, { model: "thread-default", reasoning_effort: "low" }),
+    modelContext(2, "model-a", { model: "model-a", effort: "high", collaboration_mode: { settings: { model: "ignored", reasoning_effort: "low" } } }),
+    modelUser(3, "model-a", "First request"),
+    modelThreadSettings(4, { model: "model-b", reasoning_effort: "medium" }),
+    modelContext(5, "model-b", { collaboration_mode: { settings: { model: "model-b", reasoning_effort: "xhigh" } } }),
+    modelUser(6, "model-b", "Steer request"),
+    modelUser(7, "model-a", "Same original turn"),
+    modelUser(8, "model-c", "Uses thread defaults"),
+    modelUser(9, "model-d", "Context follows user"),
+    modelContext(10, "model-d", { model: "<unsafe-model>", reasoning_effort: "none" }),
+    modelUser(11, "model-e", "Missing effort"),
+    modelContext(12, "model-e", { model: "model-e" })
+  ])).filter(group => !group.isPreamble);
+  assert.deepEqual(Array.from(modelGroups, group => [group.modelSettings.model, group.modelSettings.effort]), [
+    ["model-a", "high"], ["model-b", "xhigh"], ["model-a", "high"],
+    ["model-b", "medium"], ["<unsafe-model>", "none"], ["model-e", null]
+  ], "turn settings must follow turn IDs across preambles, model switches and steer messages, with thread defaults captured at the user message");
+  const modelHtml = rendererContext.__rolloutTest.renderTurnGroup(modelGroups[4], { callById: new Map() });
+  assert.match(modelHtml, /Model: &lt;unsafe-model&gt;[\s\S]*Reasoning: none/, "model settings must be escaped and visible in the collapsed turn summary");
+  assert.doesNotMatch(modelHtml, /<unsafe-model>/, "model names must never inject HTML");
+  const legacyModelGroups = rendererContext.__rolloutTest.buildGroups([
+    modelContext(1, null, { model: "legacy-before", effort: "low" }),
+    modelUser(2, null, "Legacy before"),
+    modelUser(3, null, "Legacy after"),
+    modelContext(4, null, { model: "legacy-after", effort: "high" })
+  ]).filter(group => !group.isPreamble);
+  assert.deepEqual(Array.from(legacyModelGroups, group => [group.modelSettings.model, group.modelSettings.effort]),
+    [["legacy-before", "low"], ["legacy-after", "high"]], "legacy logs without turn IDs must support context before or after the user message");
+  const legacySwitchedGroups = rendererContext.__rolloutTest.buildGroups([
+    modelContext(1, null, { model: "legacy-a", effort: "low" }),
+    modelUser(2, null, "Legacy first request"),
+    { line: 3, value: { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done" }] } } },
+    modelContext(4, null, { model: "legacy-b", effort: "high" }),
+    modelUser(5, null, "Legacy second request")
+  ]).filter(group => !group.isPreamble);
+  assert.deepEqual(Array.from(legacySwitchedGroups, group => [group.modelSettings.model, group.modelSettings.effort]),
+    [["legacy-a", "low"], ["legacy-b", "high"]], "a later legacy context after assistant output must not overwrite the preceding turn settings");
 
   const levelOneClosed = { dataset: { rolloutLevel: "1" }, open: false };
   const levelOneOpen = { dataset: { rolloutLevel: "1" }, open: true };

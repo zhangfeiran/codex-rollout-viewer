@@ -3716,6 +3716,55 @@ function getSteerParentTurnIds(records) {
   return parentByTurnId;
 }
 
+function getModelSettings(payload) {
+  const settings = payload?.collaboration_mode?.settings;
+  const text = value => typeof value === "string" && value.trim() ? value.trim() : null;
+  return {
+    model: text(payload?.model) || text(settings?.model),
+    effort: text(payload?.effort) || text(payload?.reasoning_effort) || text(settings?.reasoning_effort)
+  };
+}
+
+function assignGroupModelSettings(groups, records) {
+  const contextByTurnId = new Map();
+  const settingsByUserRecord = new Map();
+  let threadSettings = {};
+  let precedingContext = null;
+  for (const record of records) {
+    if (getPayloadType(record) === "thread_settings_applied") {
+      threadSettings = getModelSettings(record.value.payload.thread_settings);
+      precedingContext = null;
+    } else if (record.value?.type === "turn_context") {
+      precedingContext = getModelSettings(record.value.payload);
+      const turnId = getTurnId(record);
+      if (turnId && !contextByTurnId.has(turnId)) {
+        contextByTurnId.set(turnId, precedingContext);
+      }
+    } else if (isUserMessageRecord(record)) {
+      settingsByUserRecord.set(record, getTurnId(record) ? threadSettings : precedingContext || threadSettings);
+    }
+  }
+  for (const group of groups) {
+    if (group.isPreamble) continue;
+    const userRecord = group.records.find(isUserMessageRecord);
+    const turnId = getTurnId(userRecord);
+    // Context can precede the user message (and physically belong to the previous group).
+    // Prefer explicit turn ownership; only old messages without IDs use positional context.
+    let context = turnId ? contextByTurnId.get(turnId) : null;
+    if (!turnId) {
+      for (const record of group.records.slice(1)) {
+        if (getPayloadType(record) === "task_started" || isAgentOutputRecord(record)
+          || isFunctionCallPayloadType(getPayloadType(record))) break;
+        if (record.value?.type === "turn_context") {
+          context = getModelSettings(record.value.payload);
+          break;
+        }
+      }
+    }
+    group.modelSettings = context || settingsByUserRecord.get(userRecord) || {};
+  }
+}
+
 function buildGroups(records) {
   const steerParentUserRecords = getSteerParentUserRecords(records);
   const groups = [];
@@ -3799,6 +3848,7 @@ function buildGroups(records) {
     steerGroup.steerParent = parentGroup;
     parentGroup.steerChildren.push(steerGroup);
   }
+  assignGroupModelSettings(groups, records);
   return groups;
 }
 
@@ -4430,8 +4480,11 @@ function renderSessionMeta(record) {
 
 function renderTurnContext(record) {
   const payload = record.value?.payload ?? {};
+  const settings = getModelSettings(payload);
   return renderEntry(record, "turn", "turn context", renderKeyValueList([
     ["Turn", payload.turn_id],
+    ["Model", settings.model],
+    ["Reasoning", settings.effort],
     ["CWD", payload.cwd],
     ["Mode", payload.collaboration_mode_kind]
   ]), {
@@ -4597,6 +4650,8 @@ function renderTurnGroup(group, context) {
   const meta = [
     group.isSteer ? "steer" : "",
     duration != null ? formatDuration(duration) : "",
+    !group.isPreamble ? `Model: ${group.modelSettings?.model || "Unknown"}` : "",
+    !group.isPreamble ? `Reasoning: ${group.modelSettings?.effort || "Unknown"}` : "",
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
     counts.calls ? `${formatNumber(counts.calls)} calls` : "",
