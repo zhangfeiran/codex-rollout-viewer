@@ -5567,8 +5567,7 @@ function renderTurnGroup(group, context) {
   const meta = [
     group.isSteer ? "steer" : "",
     duration != null ? formatDuration(duration) : "",
-    !group.isPreamble ? `Model: ${group.modelSettings?.model || "Unknown"}` : "",
-    !group.isPreamble ? `Reasoning: ${group.modelSettings?.effort || "Unknown"}` : "",
+    !group.isPreamble ? `${group.modelSettings?.model || "Unknown"} ${group.modelSettings?.effort || "Unknown"}` : "",
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
     counts.calls ? `${formatNumber(counts.calls)} calls` : "",
@@ -6195,7 +6194,7 @@ export async function renderLocalCodexRolloutDocument() {
     const INDEX_CACHE_VERSION = 1;
     const LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY = "current-rollout-render-cache-v1";
     const CURRENT_ROLLOUT_RENDER_CACHE_KEY = createScopedStorageKey(LEGACY_CURRENT_ROLLOUT_RENDER_CACHE_KEY);
-    const RENDER_CACHE_VERSION = 3;
+    const RENDER_CACHE_VERSION = 4;
     const WORKSPACE_SLOTS_KEY = createScopedStorageKey("workspace-slots-v1");
     const CLOSED_WORKSPACE_TABS_KEY = createScopedStorageKey("closed-workspace-tabs-v1");
     const CLOSED_WORKSPACE_TABS_LIMIT = 20;

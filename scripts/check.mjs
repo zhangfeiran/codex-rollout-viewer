@@ -883,7 +883,7 @@ async function checkMarkdownRendering() {
     ]
   }, { callById: new Map() });
   assert.match(timedTurnHtml, /rollout-turn-meta">\s*<span>2s<\/span>[\s\S]*?<span>2 events<\/span>/, "turn duration must appear before event and call counts");
-  assert.match(timedTurnHtml, /Model: Unknown[\s\S]*Reasoning: Unknown/, "missing model settings must remain explicitly unknown");
+  assert.match(timedTurnHtml, /<span>Unknown Unknown<\/span>/, "missing model settings must remain explicitly unknown");
 
   const modelUser = (line, turnId, text) => ({ line, value: { type: "response_item", payload: {
     type: "message", role: "user", content: [{ type: "input_text", text }],
@@ -910,7 +910,7 @@ async function checkMarkdownRendering() {
     ["model-b", "medium"], ["<unsafe-model>", "none"], ["model-e", null]
   ], "turn settings must follow turn IDs across preambles, model switches and steer messages, with thread defaults captured at the user message");
   const modelHtml = rendererContext.__rolloutTest.renderTurnGroup(modelGroups[4], { callById: new Map() });
-  assert.match(modelHtml, /Model: &lt;unsafe-model&gt;[\s\S]*Reasoning: none/, "model settings must be escaped and visible in the collapsed turn summary");
+  assert.match(modelHtml, /<span>&lt;unsafe-model&gt; none<\/span>/, "model and effort must appear together without labels and remain escaped in the collapsed turn summary");
   assert.doesNotMatch(modelHtml, /<unsafe-model>/, "model names must never inject HTML");
   const legacyModelGroups = rendererContext.__rolloutTest.buildGroups([
     modelContext(1, null, { model: "legacy-before", effort: "low" }),

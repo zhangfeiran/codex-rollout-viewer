@@ -4650,8 +4650,7 @@ function renderTurnGroup(group, context) {
   const meta = [
     group.isSteer ? "steer" : "",
     duration != null ? formatDuration(duration) : "",
-    !group.isPreamble ? `Model: ${group.modelSettings?.model || "Unknown"}` : "",
-    !group.isPreamble ? `Reasoning: ${group.modelSettings?.effort || "Unknown"}` : "",
+    !group.isPreamble ? `${group.modelSettings?.model || "Unknown"} ${group.modelSettings?.effort || "Unknown"}` : "",
     `${formatNumber(group.records.length)} events`,
     counts.messages ? `${formatNumber(counts.messages)} msg` : "",
     counts.calls ? `${formatNumber(counts.calls)} calls` : "",
