@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
-import { createRolloutSearchEntries, findRolloutSearchMatches, parseCodexRolloutJsonl, isCodexRolloutRecords, ROLLOUT_SEARCH_CATEGORIES } from "../rollout-renderer.js";
+import { createRolloutSearchEntries, findRolloutSearchMatches, parseCodexRolloutJsonl, isCodexRolloutRecords, ROLLOUT_SEARCH_CATEGORIES, getRolloutId, applyRolloutRollbacks } from "../rollout-renderer.js";
 
 const message = (role, text, turn_id = "turn-a") => ({ type: "response_item", payload: { type: "message", role, turn_id, content: [{ type: "input_text", text }] } });
 const asJsonl = values => values.map(value => JSON.stringify(value)).join("\n");
@@ -83,7 +83,7 @@ export async function checkContentSearch() {
   const sourceA = makeSource("folder-a");
   const sourceB = makeSource("folder-b", asJsonl([fixture[0], message("user", "other-folder-only")]));
   const context = {
-    createRolloutSearchEntries, findRolloutSearchMatches, parseCodexRolloutJsonl, isCodexRolloutRecords, ROLLOUT_SEARCH_CATEGORIES,
+    createRolloutSearchEntries, findRolloutSearchMatches, parseCodexRolloutJsonl, isCodexRolloutRecords, ROLLOUT_SEARCH_CATEGORIES, getRolloutId, applyRolloutRollbacks,
     CONTENT_SEARCH_STATE_KEY: "search-test", contentSearchStates: new Map(),
     contentSearchCache: new Map(), contentSearchCacheSize: 0, currentRolloutSearchDocument: null,
     activeWorkspaceViewKind: "index", selectedDirectoryEntry: { id: "folder-a" }, currentIndexLabel: "Folder A",

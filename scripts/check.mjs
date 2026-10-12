@@ -11,6 +11,7 @@ import { checkRolloutTitles } from "./check-rollout-titles.mjs";
 import { checkReopen } from "./check-reopen.mjs";
 import { checkInlineForks } from "./check-inline-forks.mjs";
 import { checkForks } from "./check-forks.mjs";
+import { checkHistory } from "./check-history.mjs";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const files = [
@@ -973,5 +974,6 @@ await checkRolloutTitles();
 await checkForks();
 await checkReopen();
 await checkInlineForks();
+await checkHistory();
 
 console.log(`Checked ${files.length} JavaScript files and the local HTML entrypoint.`);

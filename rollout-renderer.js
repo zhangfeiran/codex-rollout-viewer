@@ -2440,6 +2440,39 @@ function getSessionMeta(records) {
   return records.find(record => record.value?.type === "session_meta")?.value?.payload ?? null;
 }
 
+export function getRolloutId(records, fileName = "") {
+  const sessionId = getSessionMeta(records)?.id;
+  const threadId = typeof sessionId === "string" ? sessionId : "";
+  const name = String(fileName).split(/[\\/]/).pop();
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const match = name.match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, "i"));
+  // Revert preserves the thread ID, but switches to a distinct immutable rollout file.
+  return match && (!threadId || match[1].toLowerCase() === threadId.toLowerCase())
+    ? (match[2] || match[1]).toLowerCase() : threadId;
+}
+
+function getRolloutHistoryBase(records) {
+  const base = getSessionMeta(records)?.history_base;
+  const id = typeof base?.thread_id === "string" ? base.thread_id.toLowerCase() : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+    || !Number.isSafeInteger(base.end_ordinal_exclusive) || base.end_ordinal_exclusive < 0
+    || !Number.isSafeInteger(base.end_byte_offset) || base.end_byte_offset < 0) return null;
+  return { id, endOrdinalExclusive: base.end_ordinal_exclusive, endByteOffset: base.end_byte_offset };
+}
+
+function selectRolloutHistoryPrefix(parsed, endOrdinalExclusive, byteBounded = false) {
+  if (!Number.isSafeInteger(endOrdinalExclusive) || endOrdinalExclusive < 0) return parsed;
+  if (!byteBounded && parsed.records.some(record => record.value?.type !== "session_meta"
+    && !Number.isSafeInteger(record.value?.ordinal))) {
+    throw new Error("This source has no record ordinals. Choose the original source JSONL with its history byte boundary.");
+  }
+  return {
+    ...parsed,
+    records: parsed.records.filter(record => record.value?.type === "session_meta"
+      || !Number.isSafeInteger(record.value?.ordinal) || record.value.ordinal < endOrdinalExclusive)
+  };
+}
+
 function getRolloutForkSourceId(records) {
   const session = getSessionMeta(records);
   const id = typeof session?.forked_from_id === "string" ? session.forked_from_id.trim().toLowerCase() : "";
@@ -2697,7 +2730,54 @@ function shouldDropRecord(record) {
   if (record.value?.type === "event_msg" && payloadType === "item_completed") {
     return true;
   }
-  return payloadType === "reasoning" || payloadType === "token_count";
+  return payloadType === "reasoning" || payloadType === "token_count" || record.value?.type === "token_usage_record";
+}
+
+export function applyRolloutRollbacks(records) {
+  const active = [];
+  const boundaries = [];
+  const mirrored = getMirroredEventMessages(records);
+  let pendingStart = null;
+  for (const record of records) {
+    if (getPayloadType(record) === "thread_rolled_back") {
+      if (record.rolledBackRecords) {
+        active.push(record);
+        pendingStart = null;
+        continue;
+      }
+      const count = record.value.payload.num_turns;
+      if (Number.isSafeInteger(count) && count > 0 && boundaries.length) {
+        const remaining = Math.max(0, boundaries.length - count);
+        const cut = boundaries[remaining];
+        const rolledBackRecords = active.splice(cut);
+        boundaries.length = remaining;
+        active.push({ ...record, rolledBackRecords });
+      } else {
+        active.push(record);
+      }
+      pendingStart = null;
+      continue;
+    }
+    if (getPayloadType(record) === "task_started") pendingStart = active.length;
+    if (isUserMessageRecord(record) && !isContextOnlyUserMessageRecord(record) && !mirrored.has(record)) {
+      const previous = active[active.length - 1];
+      let start = pendingStart ?? (previous && isMirroredMessagePair(previous, record) ? active.length - 1 : active.length);
+      // Legacy files may have context updates before the prompt without a task_started event.
+      // Keep the original preamble, but remove later pre-turn context with its withdrawn input.
+      if (boundaries.length) {
+        while (start > 0) {
+          const preceding = active[start - 1];
+          if (preceding.value?.type === "turn_context" || isContextOnlyUserMessageRecord(preceding)
+            || (preceding.value?.type === "response_item" && getPayloadRole(preceding) === "developer")) start -= 1;
+          else break;
+        }
+      }
+      boundaries.push(start);
+      pendingStart = null;
+    }
+    active.push(record);
+  }
+  return active;
 }
 
 function combineToolCallRecords(records) {
@@ -2761,7 +2841,7 @@ function combineToolCallRecords(records) {
 }
 
 function createRenderableRecords(records) {
-  const normalizedRecords = normalizeCompletedAgentMessageTurnIds(records.map(normalizeFileChangeRecord));
+  const normalizedRecords = normalizeCompletedAgentMessageTurnIds(applyRolloutRollbacks(records).map(normalizeFileChangeRecord));
   markLocalCompactSummaryRecords(normalizedRecords);
   const mirroredEventMessages = getMirroredEventMessages(normalizedRecords);
   const isDropped = record => mirroredEventMessages.has(record)
@@ -2828,15 +2908,21 @@ function getRolloutSearchText(value) {
 }
 
 export function createRolloutSearchEntries(records) {
+  const active = applyRolloutRollbacks(records);
+  const activeLines = new Set(active.map(record => record.line));
   const normalized = normalizeCompletedAgentMessageTurnIds(records.map(normalizeFileChangeRecord));
   markLocalCompactSummaryRecords(normalized);
   const mirrored = getMirroredEventMessages(normalized);
   const bestMessages = new Map();
   const toolNames = new Map();
+  const searchKey = record => {
+    const key = getMessageDedupKey(record);
+    return key ? `${activeLines.has(record.line) ? "active" : "rolled-back"}\u0000${key}` : null;
+  };
   for (const record of normalized) {
     const payload = record.value?.payload || {};
     if (isFunctionCallPayloadType(payload.type) && payload.call_id) toolNames.set(payload.call_id, payload.name);
-    const key = getMessageDedupKey(record);
+    const key = searchKey(record);
     if (key && !mirrored.has(record)) {
       const current = bestMessages.get(key);
       if (!current || getRecordPriority(record) > getRecordPriority(current)) bestMessages.set(key, record);
@@ -2847,7 +2933,7 @@ export function createRolloutSearchEntries(records) {
     const value = record.value || {};
     const payload = value.payload || {};
     const type = getPayloadType(record);
-    const key = getMessageDedupKey(record);
+    const key = searchKey(record);
     if (mirrored.has(record) || (key && bestMessages.get(key) !== record)) continue;
     let category = "system";
     let label = type;
@@ -2877,6 +2963,10 @@ export function createRolloutSearchEntries(records) {
     } else {
       if (["exec_command_end", "patch_apply_end"].includes(type)) category = "tool_output";
       text = getRolloutSearchText(value.payload ?? value);
+    }
+    if (!activeLines.has(record.line)) {
+      category = "system";
+      label = `Rolled back · ${label}`;
     }
     if (text.trim()) entries.push({ line: record.line, category, label, text });
   }
@@ -2962,6 +3052,7 @@ function isContextOnlyUserMessageRecord(record) {
   const withoutContext = getMessageText(record)
     .replace(/<environment_context>[\s\S]*?<\/environment_context>/gi, " ")
     .replace(/^# AGENTS\.md instructions[\s\S]*?<\/INSTRUCTIONS>/i, " ")
+    .replace(/<(codex_internal_context|subagent_notification|goal_context|skill|user_shell_command|turn_aborted|recommended_plugins|external_[\w.-]+)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .trim();
   return !withoutContext;
 }
@@ -3607,9 +3698,43 @@ function renderKeyValueList(items) {
   return rows.length ? `<dl class="rollout-kv">${rows.join("")}</dl>` : "";
 }
 
+function renderRolloutSource(source, session, options) {
+  const ancestors = options.forkAncestors || [getRolloutId([], options.fileName) || session?.id].filter(Boolean);
+  const cutoff = Number.isSafeInteger(source.endOrdinalExclusive) ? source.endOrdinalExclusive : null;
+  const summary = cutoff == null ? "Source rollout · expand / collapse"
+    : `Inherited history · before ordinal ${cutoff} · expand / collapse`;
+  return `
+    <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(source.id)}" data-fork-ancestors="${escapeAttribute(JSON.stringify(ancestors))}" data-fork-directory-id="${escapeAttribute(options.directoryId || "")}"${cutoff == null ? "" : ` data-history-end-ordinal="${cutoff}"`}${source.endByteOffset == null ? "" : ` data-history-end-byte="${source.endByteOffset}"`}>
+      <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">${source.label}: <span data-fork-source-label>${escapeHtml(source.id)}</span> ↗</button>
+      <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
+      <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
+      <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+      <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(source.id)}${cutoff == null ? "" : `:${cutoff}`}">
+        <summary>${summary}</summary>
+        <div class="rollout-fork-preview-body" data-fork-preview-body></div>
+      </details>
+    </div>
+  `;
+}
+
 function renderHeader(records, parseErrors, options = {}) {
   const session = getSessionMeta(records);
   const forkSourceId = getRolloutForkSourceId(records);
+  const historyBase = getRolloutHistoryBase(records);
+  const rolloutId = getRolloutId(records, options.fileName);
+  const sources = [];
+  if (historyBase) sources.push({ ...historyBase, label: historyBase.id === forkSourceId ? "Forked from" : "History from" });
+  if (forkSourceId && forkSourceId !== historyBase?.id) {
+    const cutoff = session.forked_from_ordinal_exclusive;
+    sources.push({ id: forkSourceId, label: "Forked from", endOrdinalExclusive: Number.isSafeInteger(cutoff) && cutoff >= 0 ? cutoff : null });
+  }
+  for (const source of sources) {
+    if (Number.isSafeInteger(options.historyEndOrdinal) && Number.isSafeInteger(source.endOrdinalExclusive)) {
+      // A nested prefix must never include history newer than the enclosing prefix.
+      if (options.historyEndOrdinal < source.endOrdinalExclusive) source.endByteOffset = null;
+      source.endOrdinalExclusive = Math.min(source.endOrdinalExclusive, options.historyEndOrdinal);
+    }
+  }
   const stats = summarizeRecords(records, parseErrors);
   const title = options.title || (session?.id ? `Codex Rollout ${session.id}` : options.fileName || getFileName(options.sourceUrl));
   const chips = [
@@ -3617,7 +3742,8 @@ function renderHeader(records, parseErrors, options = {}) {
     session?.cwd,
     session?.model_provider,
     session?.originator,
-    session?.cli_version ? `CLI ${session.cli_version}` : null
+    session?.cli_version ? `CLI ${session.cli_version}` : null,
+    rolloutId && rolloutId !== session?.id ? `Rollout: ${rolloutId}` : null
   ].filter(Boolean);
   return `
     <header class="rollout-hero" id="rollout-top">
@@ -3628,18 +3754,7 @@ function renderHeader(records, parseErrors, options = {}) {
       <p class="rollout-subtitle">
         ${chips.map(chip => `<span class="rollout-chip">${escapeHtml(chip)}</span>`).join("")}
       </p>
-      ${forkSourceId ? `
-        <div class="rollout-fork-source" data-rollout-fork-source="${escapeAttribute(forkSourceId)}" data-fork-ancestors="${escapeAttribute(JSON.stringify(options.forkAncestors || [session?.id].filter(Boolean)))}" data-fork-directory-id="${escapeAttribute(options.directoryId || "")}">
-          <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">Forked from: <span data-fork-source-label>${escapeHtml(forkSourceId)}</span> ↗</button>
-          <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
-          <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
-          <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
-          <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(forkSourceId)}">
-            <summary>Source rollout · expand / collapse</summary>
-            <div class="rollout-fork-preview-body" data-fork-preview-body></div>
-          </details>
-        </div>
-      ` : ""}
+      ${sources.map(source => renderRolloutSource(source, session, options)).join("")}
     </header>
     <section class="rollout-stats" aria-label="Rollout summary">
       ${renderStat("Turns", formatNumber(stats.turns))}
@@ -3683,6 +3798,10 @@ function getSteerParentUserRecords(records) {
   const finalizedTurnIds = new Set();
   let previousUserRecord = null;
   for (const record of records) {
+    if (getPayloadType(record) === "thread_rolled_back") {
+      previousUserRecord = null;
+      continue;
+    }
     if (isFinalAnswerRecord(record)) {
       const finalTurnId = getTurnId(record);
       if (finalTurnId) {
@@ -4375,6 +4494,13 @@ function renderFunctionOutput(record, callById) {
 
 function renderEvent(record) {
   const payload = record.value?.payload ?? {};
+  if (payload.type === "thread_rolled_back") {
+    const body = renderKeyValueList([["Removed user inputs", payload.num_turns]])
+      + (record.rolledBackRecords?.length ? renderLazyCodeDetails("Rolled-back source records",
+        record.rolledBackRecords.map(source => ({ line: source.line, ...source.value,
+          ...(source.rolledBackRecords ? { rolled_back_records: source.rolledBackRecords } : {}) })), "json", `record-${record.line}:rollback`) : "");
+    return renderEntry(record, "event", "Thread rolled back", body, { kind: "event" });
+  }
   if (payload.type === "agent_message" || payload.type === "user_message") {
     return renderMessage(record);
   }
@@ -4500,7 +4626,7 @@ function renderUnknown(record) {
     ["Role", payload.role],
     ["ID", payload.id]
   ]);
-  return renderEntry(record, "event", type, body || `<p class="rollout-empty">No compact renderer for this event.</p>`, {
+  return renderEntry(record, "event", type, body + renderLazyCodeDetails("Source record", record.value, "json", `record-${record.line}:source`), {
     kind: "event"
   });
 }

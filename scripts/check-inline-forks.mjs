@@ -5,7 +5,7 @@ import vm from "node:vm";
 export async function checkInlineForks() {
   const renderer = await readFile(new URL("../rollout-renderer.js", import.meta.url), "utf8");
   const html = await readFile(new URL("../codex-rollout-viewer.html", import.meta.url), "utf8");
-  const context = vm.createContext({ console });
+  const context = vm.createContext({ console, TextEncoder, TextDecoder });
   vm.runInContext(renderer.replace(/^export\s+/gm, "").replace(/import\.meta\.url/g, JSON.stringify("file:///viewer/rollout-renderer.js")), context);
   for (const name of ["normalizeRolloutUuid", "showForkSourceStatus", "getForkSourceAncestors", "restoreInlineForkPreviews", "expandForkSourceInline", "openChosenForkSource"]) {
     const match = html.match(new RegExp(`^    (?:async )?function ${name}\\([^]*?\\n    \\}`, "m"));
@@ -109,5 +109,44 @@ export async function checkInlineForks() {
   await context.expandForkSourceInline(mismatch.root);
   assert.match(mismatch.status.textContent, /does not match/);
   assert.equal(mismatch.body.innerHTML, "");
+
+  const boundedPrefix = [
+    { type: "session_meta", ordinal: 0, payload: { id: source, forked_from_id: ancestor,
+      history_base: { thread_id: ancestor, end_ordinal_exclusive: 20, end_byte_offset: 4000 } } },
+    { type: "response_item", ordinal: 1, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Inherited 中文 boundary" }] } }
+  ].map(value => JSON.stringify(value)).join("\n") + "\n";
+  const later = JSON.stringify({ type: "response_item", ordinal: 2, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Later parent branch must be excluded" }] } });
+  sources.set(source, boundedPrefix + later);
+  context.findForkSourceItem = async () => ({ item: item(source) });
+  const bounded = makeRoot();
+  bounded.root.dataset.historyEndOrdinal = "2";
+  bounded.root.dataset.historyEndByte = String(Buffer.byteLength(boundedPrefix));
+  const beforeBounded = vm.runInContext("lazyRolloutContentStore.size", context);
+  await context.expandForkSourceInline(bounded.root);
+  assert.equal(bounded.details.dataset.loaded, "true");
+  const boundedLazy = Array.from(vm.runInContext("[...lazyRolloutContentStore.values()]", context).slice(beforeBounded)).join("\n");
+  assert.match(boundedLazy, /Inherited 中文 boundary/);
+  assert.doesNotMatch(boundedLazy, /Later parent branch/);
+  assert.match(bounded.body.innerHTML, /data-history-end-ordinal="2"/, "a source's own parent inherits the enclosing cutoff");
+  assert.doesNotMatch(bounded.body.innerHTML, /data-history-end-byte="4000"/);
+
+  const ordinalOnly = makeRoot();
+  ordinalOnly.root.dataset.historyEndOrdinal = "2";
+  await context.expandForkSourceInline(ordinalOnly.root);
+  assert.equal(ordinalOnly.details.dataset.loaded, "true", "ordinal-only fork boundaries also exclude later source turns");
+  const emptyPrefix = makeRoot();
+  emptyPrefix.root.dataset.historyEndOrdinal = "0";
+  emptyPrefix.root.dataset.historyEndByte = "0";
+  await context.expandForkSourceInline(emptyPrefix.root);
+  assert.equal(emptyPrefix.details.dataset.loaded, "true");
+  assert.match(emptyPrefix.body.innerHTML, /No inherited records/);
+  const reversionId = "01a11b48-557d-7883-9bfe-dbe9fb2b5900";
+  const reversion = makeRoot(reversionId);
+  context.findForkSourceItem = async () => ({ item: {
+    rolloutId: reversionId,
+    source: { name: `rollout-2026-10-08T19-31-27-${source}_${reversionId}.jsonl`, getText: async () => boundedPrefix }
+  } });
+  await context.expandForkSourceInline(reversion.root);
+  assert.equal(reversion.details.dataset.loaded, "true", "physical history bases match the filename rollout ID even when metadata keeps a different thread ID");
   console.log("Checked recursive inline fork rendering, lazy-store and DOM isolation, collapse reuse, cycles, permissions, manual fallback, and cancellation.");
 }
