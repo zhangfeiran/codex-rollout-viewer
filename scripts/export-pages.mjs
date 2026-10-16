@@ -29,6 +29,7 @@ await Promise.all([
   )
 ]);
 await cp(path.join(projectDir, "vendor", "katex"), path.join(pagesDir, "vendor", "katex"), { recursive: true });
+await cp(path.join(projectDir, "vendor", "fzstd"), path.join(pagesDir, "vendor", "fzstd"), { recursive: true });
 
 await writeFile(path.join(pagesDir, ".nojekyll"), "", "utf8");
 

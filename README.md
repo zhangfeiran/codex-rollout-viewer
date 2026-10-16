@@ -1,6 +1,6 @@
 # Codex Rollout Viewer
 
-Browser-based viewer for local Codex rollout `.jsonl` files.
+Browser-based viewer for local Codex rollout `.jsonl`, `.jsonl.zst`, and `.zst` files.
 
 ## Recommended
 
@@ -41,6 +41,8 @@ Only `User messages` and `Assistant messages` are selected by default. You can a
 For local/offline use, open `codex-rollout-viewer.html` in Chrome.
 
 The local HTML file has the same viewer UI and can read local rollout files after the same browser permission prompts. Markdown content supports GFM-style tables, inline math with `\(...\)` or `$...$`, and display math with `\[...\]` or `$$...$$`. KaTeX and its fonts are vendored locally, so formula rendering also works offline.
+
+Zstandard-compressed rollouts work through file selection, drag and drop, remembered-folder scans, content search, and fork previews. Decompression uses the bundled local fzstd library, including offline. Compressed files are decompressed and parsed in full when changed; unchanged files reuse their parsed cache. Plain JSONL keeps incremental append parsing. Fork history byte boundaries refer to the uncompressed UTF-8 content. If a remembered `.jsonl` has been archived as `.jsonl.zst` (or restored to `.jsonl`), directory-backed tabs resolve the alternate file and retain the same viewer state. Decompression failures include the archive filename.
 
 ### Map Linux file links to a Windows drive
 

@@ -921,6 +921,7 @@ const JSONL_FILE_PATTERN = /\.jsonl(?:$|[?#])/i;
 const HIGHLIGHT_JS_VENDOR_PATH = "vendor/highlightjs/highlight.min.js";
 const KATEX_JS_VENDOR_PATH = "vendor/katex/katex.min.js";
 const KATEX_CSS_VENDOR_PATH = "vendor/katex/katex.min.css";
+const ZSTD_JS_VENDOR_PATH = "vendor/fzstd/fzstd.min.js";
 const MAX_DETAILS_STRING_LENGTH = 8000;
 const MAX_DISPLAY_TEXT_LENGTH = 120000;
 const LONG_CONTENT_COLLAPSE_LENGTH = 2200;
@@ -929,6 +930,7 @@ const LONG_OUTPUT_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 
 let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
+let zstdDecoderPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
 let rolloutSearchLocations = new Map();
@@ -3362,7 +3364,7 @@ export function getRolloutId(records, fileName = "") {
   const threadId = typeof sessionId === "string" ? sessionId : "";
   const name = String(fileName).split(/[\\/]/).pop();
   const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-  const match = name.match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, "i"));
+  const match = name.match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.(?:jsonl(?:\\.zst)?|zst)$`, "i"));
   // Revert preserves the thread ID, but switches to a distinct immutable rollout file.
   return match && (!threadId || match[1].toLowerCase() === threadId.toLowerCase())
     ? (match[2] || match[1]).toLowerCase() : threadId;
@@ -4625,7 +4627,7 @@ function renderRolloutSource(source, session, options) {
       <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">${source.label}: <span data-fork-source-label>${escapeHtml(source.id)}</span> ↗</button>
       <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
       <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
-      <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+      <input type="file" accept=".jsonl,.zst,application/json,application/jsonl,application/zstd" data-fork-source-file hidden>
       <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(source.id)}${cutoff == null ? "" : `:${cutoff}`}">
         <summary>${summary}</summary>
         <div class="rollout-fork-preview-body" data-fork-preview-body></div>
@@ -5762,7 +5764,7 @@ function renderDocument(records, errors, options = {}) {
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
-  const title = session?.id ? `Codex Rollout ${session.id}` : fileName.replace(/\.jsonl$/i, "");
+  const title = session?.id ? `Codex Rollout ${session.id}` : fileName.replace(/\.(?:jsonl(?:\.zst)?|zst)$/i, "");
   const charset = document.createElement("meta");
   charset.setAttribute("charset", "utf-8");
   const viewport = createMeta("viewport", "width=device-width, initial-scale=1");
@@ -6100,6 +6102,40 @@ function loadPageScript(url, assetName) {
     });
     document.head.append(script);
   });
+}
+
+function isZstdFileName(name) {
+  return /\.zst$/i.test(name || "");
+}
+
+async function ensureZstdDecoder() {
+  if (globalThis.fzstd?.decompress) return;
+  if (!zstdDecoderPromise) {
+    zstdDecoderPromise = (async () => {
+      const url = getRuntimeUrl(ZSTD_JS_VENDOR_PATH);
+      if (!url) throw new Error("Zstandard decoder URL unavailable");
+      await loadPageScript(url, "fzstd");
+      if (!globalThis.fzstd?.decompress) throw new Error("Zstandard decoder did not load");
+    })().catch(error => {
+      zstdDecoderPromise = null;
+      throw error;
+    });
+  }
+  return zstdDecoderPromise;
+}
+
+async function readRolloutFileText(file, start = 0, end) {
+  if (!isZstdFileName(file.name)) return file.slice(start, end).text();
+  try {
+    await ensureZstdDecoder();
+    const compressed = new Uint8Array(await file.arrayBuffer());
+    if (!compressed.length) throw new Error("Empty Zstandard file");
+    const bytes = globalThis.fzstd.decompress(compressed);
+    // History boundaries count uncompressed UTF-8 bytes, not compressed bytes or JS characters.
+    return new TextDecoder().decode(bytes.subarray(start, end));
+  } catch (error) {
+    throw new Error(`Could not decompress ${file.name}: ${error?.message || error}`);
+  }
 }
 
 function loadPageStylesheet(url, assetName) {
@@ -6756,7 +6792,7 @@ export async function renderLocalCodexRolloutDocument() {
 
     function getSourceRolloutId(source) {
       const fileName = String(source?.name || source?.path || "").split(/[\\/]/).pop();
-      const reverted = fileName.match(/^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f-]{36}_([0-9a-f-]{36})\.jsonl$/i);
+      const reverted = fileName.match(/^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f-]{36}_([0-9a-f-]{36})\.(?:jsonl(?:\.zst)?|zst)$/i);
       return normalizeRolloutUuid(source?.rolloutId)
         || normalizeRolloutUuid(reverted?.[1])
         || normalizeRolloutUuid(source?.path)
@@ -7384,7 +7420,7 @@ export async function renderLocalCodexRolloutDocument() {
           ${renderWorkspaceTabs()}
         </div>
         <div class="standalone-workspace-new">
-          <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input data-workspace-file-input hidden>
+          <input type="file" accept=".jsonl,.zst,application/json,application/jsonl,application/zstd" multiple data-file-input data-workspace-file-input hidden>
           <button class="standalone-workspace-add" type="button" data-reopen-workspace-tab data-workspace-key="reopen-tab" title="${escapeAttribute(closedWorkspaceTabs.length ? `Reopen: ${closedWorkspaceTabs.at(-1).label} (Ctrl+Shift+T)` : "No recently closed tabs")}" ${closedWorkspaceTabs.length && !reopeningWorkspaceTabs ? "" : "disabled"}>${workspaceIcon("rollout")}<span>Reopen tab${closedWorkspaceTabs.length ? ` (${closedWorkspaceTabs.length})` : ""}</span></button>
           <button class="standalone-workspace-add" type="button" data-open-jsonl-file data-workspace-key="open-jsonl" title="Open JSONL" aria-label="Open JSONL">${workspaceIcon("plus")}<span>Open JSONL</span></button>
           <button class="standalone-workspace-add" type="button" data-open-sessions-directory data-workspace-key="add-folder" title="Add sessions folder" aria-label="Add sessions folder">${workspaceIcon("folder")}<span>Add sessions folder</span></button>
@@ -7448,7 +7484,7 @@ export async function renderLocalCodexRolloutDocument() {
         ${showFoldersButton ? `<button class="standalone-file-button" type="button" data-saved-directories ${savedDirectoryEntries.length ? "" : "hidden"}>${savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders"}</button>` : ""}
         <button class="standalone-file-button" type="button" data-open-jsonl-file ${window.showOpenFilePicker ? "" : "hidden"}>Choose JSONL</button>
         <label class="standalone-file-button" data-file-input-fallback ${window.showOpenFilePicker ? "hidden" : ""}>
-          <input type="file" accept=".jsonl,application/json,application/jsonl" multiple data-file-input>
+          <input type="file" accept=".jsonl,.zst,application/json,application/jsonl,application/zstd" multiple data-file-input>
           Choose JSONL file
         </label>
       `;
@@ -8000,12 +8036,13 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function isJsonlFileName(name) {
-      return /\.jsonl$/i.test(name || "");
+      return /\.(?:jsonl(?:\.zst)?|zst)$/i.test(name || "");
     }
 
     function createSourceFromFile(file, relativePath = file.name) {
       const source = {
         name: file.name,
+        compressed: isZstdFileName(file.name),
         path: relativePath || file.name,
         lastModified: file.lastModified,
         size: file.size,
@@ -8015,9 +8052,9 @@ export async function renderLocalCodexRolloutDocument() {
             size: file.size
           };
         },
-        getText: () => file.text(),
+        getText: () => readRolloutFileText(file),
         getTextSlice(start, end) {
-          return file.slice(start, end).text();
+          return readRolloutFileText(file, start, end);
         }
       };
       source.rolloutId = getSourceRolloutId(source);
@@ -8027,30 +8064,48 @@ export async function renderLocalCodexRolloutDocument() {
     function createSourceFromFileHandle(fileHandle, relativePath, options = {}) {
       const source = {
         name: fileHandle.name,
+        compressed: isZstdFileName(fileHandle.name),
         path: relativePath || fileHandle.name,
         rolloutId: normalizeRolloutUuid(options.rolloutId),
         directoryId: options.directoryId || "",
         directoryLabel: options.directoryLabel || "",
         fileHandle,
         async getText() {
-          return (await fileHandle.getFile()).text();
+          return readRolloutFileText(await getSourceFile(source));
         },
         async getTextSlice(start, end) {
-          return (await fileHandle.getFile()).slice(start, end).text();
+          return readRolloutFileText(await getSourceFile(source), start, end);
         },
         async getMetadata() {
-          const file = await fileHandle.getFile();
+          const file = await getSourceFile(source);
           return {
             lastModified: file.lastModified,
             size: file.size
           };
         },
         async getLastModified() {
-          return (await fileHandle.getFile()).lastModified;
+          return (await getSourceFile(source)).lastModified;
         }
       };
       source.rolloutId ||= getSourceRolloutId(source);
       return source;
+    }
+
+    async function getSourceFile(source) {
+      try {
+        return await source.fileHandle.getFile();
+      } catch (error) {
+        // An open directory-backed file may be archived while the viewer is running.
+        if (error?.name !== "NotFoundError" || !source.directoryId) throw error;
+        const directory = getDirectoryEntryById(source.directoryId);
+        const handle = directory?.handle && await getFileHandleByPath(directory.handle, source.path);
+        if (!handle) throw error;
+        const file = await handle.getFile();
+        source.fileHandle = handle;
+        source.name = handle.name;
+        source.compressed = isZstdFileName(handle.name);
+        return file;
+      }
     }
 
     async function* walkDirectoryHandle(directoryHandle, basePath = "", options = {}) {
@@ -8078,6 +8133,10 @@ export async function renderLocalCodexRolloutDocument() {
             ? await current.getFileHandle(name)
             : await current.getDirectoryHandle(name);
         } catch {
+          if (isLast && /\.jsonl(?:\.zst)?$/i.test(name)) {
+            const alternative = /\.zst$/i.test(name) ? name.slice(0, -4) : `${name}.zst`;
+            try { current = await current.getFileHandle(alternative); continue; } catch {}
+          }
           return null;
         }
       }
@@ -8237,7 +8296,7 @@ export async function renderLocalCodexRolloutDocument() {
           return title;
         }
       }
-      return fileName.replace(/\.jsonl$/i, "");
+      return fileName.replace(/\.(?:jsonl(?:\.zst)?|zst)$/i, "");
     }
 
     function getRolloutTitle(records, fileName) {
@@ -8682,12 +8741,13 @@ export async function renderLocalCodexRolloutDocument() {
             description: "Codex rollout JSONL",
             accept: {
               "application/json": [".jsonl"],
-              "text/plain": [".jsonl"]
+              "text/plain": [".jsonl"],
+              "application/zstd": [".zst"]
             }
           }]
         });
         if (!fileHandle || !isJsonlFileName(fileHandle.name)) {
-          setStatus("Choose a .jsonl file.", true);
+          setStatus("Choose a .jsonl, .jsonl.zst, or .zst file.", true);
           return;
         }
         if (!await requestReadPermission(fileHandle)) {
@@ -8777,7 +8837,8 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function getSourceStateId(source) {
-      return [source?.directoryId || "", source?.path || source?.name || ""].filter(Boolean).join("::");
+      const path = String(source?.path || source?.name || "").replace(/\.jsonl\.zst$/i, ".jsonl");
+      return [source?.directoryId || "", path].filter(Boolean).join("::");
     }
 
     function splitJsonlCompleteLines(text) {
@@ -8859,10 +8920,11 @@ export async function renderLocalCodexRolloutDocument() {
         && cached.sourceId === sourceId
         && Array.isArray(cached.records)
         && Array.isArray(cached.errors)
+        && Boolean(cached.compressed) === Boolean(source.compressed)
         && Number.isFinite(cached.size)
         && Number.isFinite(metadata.size)
         && (
-          metadata.size > cached.size
+          (!source.compressed && metadata.size > cached.size)
           || (metadata.size === cached.size && cached.lastModified === metadata.lastModified)
         )
       ) {
@@ -8888,6 +8950,7 @@ export async function renderLocalCodexRolloutDocument() {
         const appendedParsed = parseJsonlLines(split.lines, (cached.lineCount || 0) + 1);
         const nextCache = {
           sourceId,
+          compressed: Boolean(source.compressed),
           size: metadata.size,
           lastModified: metadata.lastModified,
           lineCount: appendedParsed.lineCount,
@@ -8915,6 +8978,7 @@ export async function renderLocalCodexRolloutDocument() {
         },
         cache: {
           sourceId,
+          compressed: Boolean(source.compressed),
           size: metadata.size,
           lastModified: metadata.lastModified,
           lineCount: parsed.lineCount,
@@ -10004,7 +10068,7 @@ export async function renderLocalCodexRolloutDocument() {
       try {
         const [handle] = await window.showOpenFilePicker({
           id: "codex-fork-source", multiple: false,
-          types: [{ description: "Codex rollout JSONL", accept: { "application/json": [".jsonl"] } }]
+          types: [{ description: "Codex rollout JSONL or Zstandard", accept: { "application/json": [".jsonl"], "application/zstd": [".zst"] } }]
         });
         if (handle && root.isConnected) await openChosenForkSource(root, createSourceFromFileHandle(handle, handle.name));
       } catch (error) {

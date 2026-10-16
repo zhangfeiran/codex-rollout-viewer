@@ -4,6 +4,7 @@ const JSONL_FILE_PATTERN = /\.jsonl(?:$|[?#])/i;
 const HIGHLIGHT_JS_VENDOR_PATH = "vendor/highlightjs/highlight.min.js";
 const KATEX_JS_VENDOR_PATH = "vendor/katex/katex.min.js";
 const KATEX_CSS_VENDOR_PATH = "vendor/katex/katex.min.css";
+const ZSTD_JS_VENDOR_PATH = "vendor/fzstd/fzstd.min.js";
 const MAX_DETAILS_STRING_LENGTH = 8000;
 const MAX_DISPLAY_TEXT_LENGTH = 120000;
 const LONG_CONTENT_COLLAPSE_LENGTH = 2200;
@@ -12,6 +13,7 @@ const LONG_OUTPUT_COLLAPSE_LENGTH = LONG_CONTENT_COLLAPSE_LENGTH;
 
 let codeHighlightScriptPromise = null;
 let mathRenderAssetsPromise = null;
+let zstdDecoderPromise = null;
 let lazyRolloutContentStore = new Map();
 let rawMessageMarkdownStore = new Map();
 let rolloutSearchLocations = new Map();
@@ -2445,7 +2447,7 @@ export function getRolloutId(records, fileName = "") {
   const threadId = typeof sessionId === "string" ? sessionId : "";
   const name = String(fileName).split(/[\\/]/).pop();
   const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-  const match = name.match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, "i"));
+  const match = name.match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.(?:jsonl(?:\\.zst)?|zst)$`, "i"));
   // Revert preserves the thread ID, but switches to a distinct immutable rollout file.
   return match && (!threadId || match[1].toLowerCase() === threadId.toLowerCase())
     ? (match[2] || match[1]).toLowerCase() : threadId;
@@ -3708,7 +3710,7 @@ function renderRolloutSource(source, session, options) {
       <button class="rollout-fork-link" type="button" data-open-fork-source title="Open the source rollout in another workspace tab">${source.label}: <span data-fork-source-label>${escapeHtml(source.id)}</span> ↗</button>
       <div class="rollout-fork-feedback" data-fork-source-status role="status" aria-live="polite" hidden></div>
       <div class="rollout-fork-actions" data-fork-source-actions hidden></div>
-      <input type="file" accept=".jsonl,application/json,application/jsonl" data-fork-source-file hidden>
+      <input type="file" accept=".jsonl,.zst,application/json,application/jsonl,application/zstd" data-fork-source-file hidden>
       <details class="rollout-fork-preview" data-fork-preview data-rollout-state-key="fork:${escapeAttribute(source.id)}${cutoff == null ? "" : `:${cutoff}`}">
         <summary>${summary}</summary>
         <div class="rollout-fork-preview-body" data-fork-preview-body></div>
@@ -4845,7 +4847,7 @@ function renderDocument(records, errors, options = {}) {
   const session = getSessionMeta(records);
   const sourceUrl = options.sourceUrl || location.href;
   const fileName = options.fileName || getFileName(sourceUrl);
-  const title = session?.id ? `Codex Rollout ${session.id}` : fileName.replace(/\.jsonl$/i, "");
+  const title = session?.id ? `Codex Rollout ${session.id}` : fileName.replace(/\.(?:jsonl(?:\.zst)?|zst)$/i, "");
   const charset = document.createElement("meta");
   charset.setAttribute("charset", "utf-8");
   const viewport = createMeta("viewport", "width=device-width, initial-scale=1");
@@ -5183,6 +5185,40 @@ function loadPageScript(url, assetName) {
     });
     document.head.append(script);
   });
+}
+
+function isZstdFileName(name) {
+  return /\.zst$/i.test(name || "");
+}
+
+async function ensureZstdDecoder() {
+  if (globalThis.fzstd?.decompress) return;
+  if (!zstdDecoderPromise) {
+    zstdDecoderPromise = (async () => {
+      const url = getRuntimeUrl(ZSTD_JS_VENDOR_PATH);
+      if (!url) throw new Error("Zstandard decoder URL unavailable");
+      await loadPageScript(url, "fzstd");
+      if (!globalThis.fzstd?.decompress) throw new Error("Zstandard decoder did not load");
+    })().catch(error => {
+      zstdDecoderPromise = null;
+      throw error;
+    });
+  }
+  return zstdDecoderPromise;
+}
+
+async function readRolloutFileText(file, start = 0, end) {
+  if (!isZstdFileName(file.name)) return file.slice(start, end).text();
+  try {
+    await ensureZstdDecoder();
+    const compressed = new Uint8Array(await file.arrayBuffer());
+    if (!compressed.length) throw new Error("Empty Zstandard file");
+    const bytes = globalThis.fzstd.decompress(compressed);
+    // History boundaries count uncompressed UTF-8 bytes, not compressed bytes or JS characters.
+    return new TextDecoder().decode(bytes.subarray(start, end));
+  } catch (error) {
+    throw new Error(`Could not decompress ${file.name}: ${error?.message || error}`);
+  }
 }
 
 function loadPageStylesheet(url, assetName) {
