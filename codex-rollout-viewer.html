@@ -6333,6 +6333,7 @@ export async function renderLocalCodexRolloutDocument() {
     const CONTENT_SEARCH_STATE_KEY = createScopedStorageKey("content-search-v1");
     const contentSearchCache = new Map();
     const contentSearchStates = new Map();
+    const sessionTitleIndexes = new Map();
     let contentSearchCacheSize = 0;
     let currentContentSearch = null;
     let currentRolloutSearchDocument = null;
@@ -6993,11 +6994,116 @@ export async function renderLocalCodexRolloutDocument() {
     }
 
     function getRolloutDisplayTitle(item) {
-      return getCustomRolloutTitle(item) || item?.title || item?.name || item?.source?.name || "Rollout";
+      return getPreferredRolloutTitle(item) || item?.title || item?.name || item?.source?.name || "Rollout";
     }
 
     function getWorkspaceTabLabel(slot) {
-      return getCustomRolloutTitle(slot) || slot?.label || slot?.directoryLabel || "Rollout";
+      return getPreferredRolloutTitle(slot) || slot?.label || slot?.directoryLabel || "Rollout";
+    }
+
+    function parseSessionTitleIndex(text) {
+      const titles = new Map();
+      for (const line of text.split(/\r?\n/)) {
+        try {
+          const entry = JSON.parse(line.trim());
+          const id = normalizeRolloutUuid(entry.id);
+          const title = typeof entry.thread_name === "string" ? entry.thread_name.trim() : "";
+          if (!id || !title) continue;
+          const updatedAt = Date.parse(entry.updated_at) || 0;
+          const previous = titles.get(id);
+          if (!previous || updatedAt >= previous.updatedAt) titles.set(id, { title, updatedAt });
+        } catch {} // A partial final line must not hide the rest of the index.
+      }
+      return titles;
+    }
+
+    function getPreferredRolloutTitle(target) {
+      const custom = getCustomRolloutTitle(target);
+      if (custom) return custom;
+      const source = target?.source || target;
+      const id = normalizeRolloutUuid(target?.rolloutId) || normalizeRolloutUuid(target?.sessionId)
+        || getSourceRolloutId(source) || normalizeRolloutUuid(target?.sourceId);
+      if (!id) return "";
+      const directoryId = source?.directoryId || target?.directoryId;
+      if (directoryId) return sessionTitleIndexes.get(directoryId)?.titles.get(id)?.title || "";
+      let latest = null;
+      for (const index of sessionTitleIndexes.values()) {
+        const entry = index.titles.get(id);
+        if (entry && (!latest || entry.updatedAt >= latest.updatedAt)) latest = entry;
+      }
+      return latest?.title || "";
+    }
+
+    async function refreshSessionTitleIndex(entry) {
+      if (!entry) return;
+      const previous = sessionTitleIndexes.get(entry.id);
+      let handle = entry.sessionIndexHandle;
+      try {
+        if (!handle) {
+          // Parent access is possible only when the user selected that parent folder.
+          for (const directory of [entry.codexHomeHandle, entry.handle].filter(Boolean)) {
+            try { handle = await directory.getFileHandle("session_index.jsonl"); break; } catch {}
+          }
+        }
+        if (!handle || !await hasReadPermission(handle)) {
+          if (previous) previous.status = handle ? "Needs permission" : "Not found";
+          else sessionTitleIndexes.set(entry.id, { titles: new Map(), status: handle ? "Needs permission" : "Not found" });
+          return;
+        }
+        const file = await handle.getFile();
+        // Read on every refresh: title-only edits must be visible even if size and mtime match.
+        const titles = parseSessionTitleIndex(await file.text());
+        sessionTitleIndexes.set(entry.id, { titles, status: `${titles.size} Codex titles` });
+      } catch (error) {
+        sessionTitleIndexes.set(entry.id, { titles: previous?.titles || new Map(), status: `Could not read index: ${error?.message || error}` });
+      }
+    }
+
+    function renderSessionTitleIndexControl(entry) {
+      if (!entry) return "";
+      const status = sessionTitleIndexes.get(entry.id)?.status || "Not loaded";
+      return `<span class="standalone-chip">${escapeHtml(status)}</span>
+        <button class="standalone-file-button" type="button" data-choose-session-index="${escapeAttribute(entry.id)}" title="Choose session_index.jsonl beside or inside this sessions folder">Choose title index</button>
+        <input type="file" accept=".jsonl" data-session-index-input="${escapeAttribute(entry.id)}" hidden>`;
+    }
+
+    async function useSessionTitleIndexFile(id, file, handle = null) {
+      const entry = getDirectoryEntryById(id);
+      if (!entry) return;
+      const titles = parseSessionTitleIndex(await file.text());
+      if (!titles.size) {
+        setStatus("No Codex titles found. Choose session_index.jsonl with id and thread_name entries.", true);
+        return;
+      }
+      if (handle) {
+        await saveDirectoryEntries(savedDirectoryEntries.map(candidate => candidate.id === id
+          ? { ...candidate, sessionIndexHandle: handle } : candidate));
+        if (selectedDirectoryEntry?.id === id) selectedDirectoryEntry = getDirectoryEntryById(id);
+      }
+      sessionTitleIndexes.set(id, { titles, status: `${titles.size} Codex titles${handle ? "" : " (this visit)"}` });
+      if (activeWorkspaceViewKind === "folders") await renderDirectorySelectionPage();
+      else if (activeWorkspaceViewKind === "index") renderRolloutIndex(rolloutIndex, currentIndexLabel, currentIndexNotice);
+      else refreshRolloutTitleViews();
+      setStatus(`Loaded ${titles.size} Codex titles.${handle ? " The index file is remembered for this sessions folder." : " Choose it again after reopening the viewer."}`);
+    }
+
+    async function chooseSessionTitleIndex(id) {
+      try {
+        if (!window.showOpenFilePicker) {
+          document.querySelector(`[data-session-index-input="${CSS.escape(id)}"]`)?.click();
+          return;
+        }
+        const entry = getDirectoryEntryById(id);
+        const [handle] = await window.showOpenFilePicker({
+          id: "codex-session-index", multiple: false,
+          startIn: entry?.codexHomeHandle || entry?.handle,
+          types: [{ description: "Codex session title index", accept: { "application/jsonl": [".jsonl"] } }]
+        });
+        if (!await requestReadPermission(handle)) return;
+        await useSessionTitleIndexFile(id, await handle.getFile(), handle);
+      } catch (error) {
+        if (error?.name !== "AbortError") setStatus(`Could not load title index: ${error?.message || error}`, true);
+      }
     }
 
     function updateRenderedRolloutTitle() {
@@ -7006,13 +7112,13 @@ export async function renderLocalCodexRolloutDocument() {
       if (!heading) return;
       heading.dataset.defaultRolloutTitle ??= heading.textContent;
       heading.dataset.defaultDocumentTitle ??= document.title;
-      const title = getCustomRolloutTitle(currentRenderedSource);
+      const title = getPreferredRolloutTitle(currentRenderedSource);
       heading.textContent = title || heading.dataset.defaultRolloutTitle;
       document.title = title || heading.dataset.defaultDocumentTitle;
       const fork = document.querySelector("[data-rollout-fork-source]");
       if (fork) {
         const id = fork.dataset.rolloutForkSource;
-        fork.querySelector("[data-fork-source-label]").textContent = getCustomRolloutTitle({ rolloutId: id }) || id;
+        fork.querySelector("[data-fork-source-label]").textContent = getPreferredRolloutTitle({ rolloutId: id }) || id;
       }
     }
 
@@ -7034,7 +7140,7 @@ export async function renderLocalCodexRolloutDocument() {
       const key = getRolloutTitleStorageKey(target);
       if (!key) return;
       const original = target?.sourceId ? getWorkspaceTabLabel(target) : getRolloutDisplayTitle(target);
-      const input = window.prompt("Rollout title (leave empty to restore the original):", original);
+      const input = window.prompt("Rollout title (leave empty to use the Codex title or original):", original);
       if (input === null) return;
       const title = input.trim();
       try {
@@ -7291,6 +7397,7 @@ export async function renderLocalCodexRolloutDocument() {
         <div class="standalone-workspace-actions" role="group" aria-label="Workspace actions">
           <button class="standalone-workspace-action" type="button" data-focus-content-search data-workspace-key="search">Search</button>
           ${activeSlot?.sourceId ? `<button class="standalone-workspace-action" type="button" data-edit-current-rollout-title data-workspace-key="edit-title">Edit title</button>` : ""}
+          ${currentRenderedSource?.directoryId ? renderSessionTitleIndexControl(getDirectoryEntryById(currentRenderedSource.directoryId)) : ""}
           ${currentRenderedSource ? `<button class="standalone-workspace-action" type="button" data-back-index data-workspace-key="back-index" title="Return to the source folder tab">Back to index</button>` : ""}
           <button class="standalone-workspace-action" type="button" data-refresh-workspace-slot data-workspace-key="refresh" ${activeSlot?.sourceId ? "" : "disabled"}>Refresh</button>
           <select class="standalone-workspace-auto-refresh" data-workspace-auto-refresh data-workspace-key="auto-refresh" title="Automatic refresh for this session" aria-label="Automatic refresh for this session" ${activeSlot ? "" : "disabled"}>
@@ -7337,7 +7444,7 @@ export async function renderLocalCodexRolloutDocument() {
     function renderActionControls(options = {}) {
       const showFoldersButton = options.showFoldersButton !== false;
       return `
-        <button class="standalone-file-button" type="button" data-open-sessions-directory>Add sessions folder</button>
+        <button class="standalone-file-button" type="button" data-open-sessions-directory title="Choose .codex to also find session_index.jsonl, or choose a sessions folder">Add sessions folder</button>
         ${showFoldersButton ? `<button class="standalone-file-button" type="button" data-saved-directories ${savedDirectoryEntries.length ? "" : "hidden"}>${savedDirectoryEntries.length === 1 ? "Sessions folder" : "Sessions folders"}</button>` : ""}
         <button class="standalone-file-button" type="button" data-open-jsonl-file ${window.showOpenFilePicker ? "" : "hidden"}>Choose JSONL</button>
         <label class="standalone-file-button" data-file-input-fallback ${window.showOpenFilePicker ? "hidden" : ""}>
@@ -7388,6 +7495,7 @@ export async function renderLocalCodexRolloutDocument() {
               ${renderActionControls({ showFoldersButton: false })}
             </div>
             <p class="standalone-status" data-status>${escapeHtml(notice || "Choose a remembered sessions folder, or add another one.")}</p>
+            <p class="standalone-status">Choose the parent .codex folder to automatically find sessions and its title index. For an existing sessions folder, choose session_index.jsonl beside or inside it.</p>
           </header>
           ${rows.length ? `
             <section class="standalone-table-wrap" aria-label="Remembered sessions folders">
@@ -7397,6 +7505,7 @@ export async function renderLocalCodexRolloutDocument() {
                     <th class="standalone-cell-folder-name">Folder</th>
                     <th>Status</th>
                     <th>Link drive</th>
+                    <th>Codex titles</th>
                     <th class="standalone-cell-date">Last opened</th>
                     <th class="standalone-cell-date">Added</th>
                     <th>Actions</th>
@@ -7413,6 +7522,7 @@ export async function renderLocalCodexRolloutDocument() {
                       <td>
                         <button class="standalone-file-button" type="button" data-edit-directory-link-drive-id="${escapeAttribute(entry.id)}" title="Map Linux Markdown file links to a Windows drive">${escapeHtml(entry.markdownLinkDrive || "Not set")}</button>
                       </td>
+                      <td>${renderSessionTitleIndexControl(entry)}</td>
                       <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.usedAt))}</td>
                       <td class="standalone-cell-date">${escapeHtml(formatDateTime(entry.addedAt))}</td>
                       <td>
@@ -7567,6 +7677,8 @@ export async function renderLocalCodexRolloutDocument() {
         name: entry.name || handle.name || "sessions",
         label: entry.label || handle.name || ".codex/sessions",
         markdownLinkDrive: normalizeMarkdownLinkDrive(entry.markdownLinkDrive),
+        sessionIndexHandle: entry.sessionIndexHandle?.kind === "file" ? entry.sessionIndexHandle : null,
+        codexHomeHandle: entry.codexHomeHandle?.kind === "directory" ? entry.codexHomeHandle : null,
         handle,
         addedAt,
         usedAt: Number.isFinite(entry.usedAt) ? entry.usedAt : addedAt
@@ -7946,7 +8058,7 @@ export async function renderLocalCodexRolloutDocument() {
         const relativePath = basePath ? `${basePath}/${name}` : name;
         if (handle.kind === "directory") {
           yield* walkDirectoryHandle(handle, relativePath, options);
-        } else if (handle.kind === "file" && isJsonlFileName(name)) {
+        } else if (handle.kind === "file" && isJsonlFileName(name) && name !== "session_index.jsonl") {
           yield createSourceFromFileHandle(handle, relativePath, options);
         }
       }
@@ -8378,6 +8490,7 @@ export async function renderLocalCodexRolloutDocument() {
               ${renderCwdFilter(items)}
               <div class="standalone-index-actions">
                 ${renderActionControls({ showFoldersButton: false })}
+                ${renderSessionTitleIndexControl(selectedDirectoryEntry)}
               </div>
             </div>
             <p class="standalone-status ${notice ? "" : ""}" data-status>${escapeHtml(notice || "Ready.")}</p>
@@ -8475,6 +8588,7 @@ export async function renderLocalCodexRolloutDocument() {
         return false;
       }
       selectedDirectoryEntry = await touchDirectoryEntry(entry);
+      await refreshSessionTitleIndex(selectedDirectoryEntry);
       openDirectoryTabIds.add(selectedDirectoryEntry.id);
       activeWorkspaceViewKind = "index";
       saveWorkspaceNavigation();
@@ -8490,8 +8604,13 @@ export async function renderLocalCodexRolloutDocument() {
       );
     }
 
-    async function loadDirectoryHandle(directoryHandle, label = directoryHandle.name || ".codex/sessions") {
-      const entry = await rememberDirectoryHandle(directoryHandle, label);
+    async function loadDirectoryHandle(directoryHandle, label = directoryHandle.name || ".codex/sessions", codexHomeHandle = null) {
+      let entry = await rememberDirectoryHandle(directoryHandle, label);
+      if (codexHomeHandle) {
+        await saveDirectoryEntries(savedDirectoryEntries.map(candidate => candidate.id === entry.id
+          ? { ...candidate, codexHomeHandle } : candidate));
+        entry = getDirectoryEntryById(entry.id);
+      }
       await loadDirectoryEntry(entry);
     }
 
@@ -8514,16 +8633,27 @@ export async function renderLocalCodexRolloutDocument() {
       return true;
     }
 
+    async function resolveSessionsDirectorySelection(handle) {
+      try {
+        return { handle: await handle.getDirectoryHandle("sessions"), codexHomeHandle: handle };
+      } catch {
+        return { handle, codexHomeHandle: null };
+      }
+    }
+
     async function chooseSessionsDirectory() {
       if (!window.showDirectoryPicker) {
         setStatus("Directory picker is unavailable in this browser.", true);
         return;
       }
       try {
-        const directoryHandle = await showDirectoryPicker({
+        let directoryHandle = await showDirectoryPicker({
           id: "codex-sessions",
           mode: "read"
         });
+        const selection = await resolveSessionsDirectorySelection(directoryHandle);
+        directoryHandle = selection.handle;
+        const codexHomeHandle = selection.codexHomeHandle;
         if (!savedDirectoryEntries.length) {
           savedDirectoryEntries = await getSavedDirectoryEntries();
         }
@@ -8531,7 +8661,7 @@ export async function renderLocalCodexRolloutDocument() {
         const existingLabel = existingIndex >= 0
           ? getDirectoryEntryLabel(savedDirectoryEntries[existingIndex])
           : directoryHandle.name || ".codex/sessions";
-        await loadDirectoryHandle(directoryHandle, askDirectoryDisplayLabel(directoryHandle, existingLabel));
+        await loadDirectoryHandle(directoryHandle, askDirectoryDisplayLabel(directoryHandle, existingLabel), codexHomeHandle);
       } catch (error) {
         if (error?.name !== "AbortError") {
           setStatus(`Could not open folder: ${error?.message || error}`, true);
@@ -8578,6 +8708,7 @@ export async function renderLocalCodexRolloutDocument() {
       const entry = getDirectoryEntryById(id);
       openDirectoryTabIds.delete(id);
       savedDirectoryEntries = savedDirectoryEntries.filter(candidate => candidate.id !== id);
+      sessionTitleIndexes.delete(id);
       if (selectedDirectoryEntry?.id === id) {
         selectedDirectoryEntry = null;
       }
@@ -9342,6 +9473,7 @@ export async function renderLocalCodexRolloutDocument() {
               refreshMessage: "Up to date."
             });
           } else {
+            await refreshSessionTitleIndex(getDirectoryEntryById(source.directoryId));
             const metadata = await getSourceMetadata(source);
             const parsedResult = await readRolloutParsedIncrementally(source, metadata, id);
             if (!isCodexRolloutRecords(parsedResult.parsed.records)) {
@@ -9360,6 +9492,7 @@ export async function renderLocalCodexRolloutDocument() {
             refreshState: "idle"
           });
           await saveWorkspaceSlots();
+          refreshRolloutTitleViews();
           return true;
         } catch (error) {
           Object.assign(slot, {
@@ -9525,6 +9658,7 @@ export async function renderLocalCodexRolloutDocument() {
       let metadata = null;
       let parsedResult = null;
       try {
+        await refreshSessionTitleIndex(getDirectoryEntryById(source.directoryId));
         metadata = await getSourceMetadata(source);
         parsedResult = await readRolloutParsedIncrementally(source, metadata, slotId);
       } catch (error) {
@@ -9587,6 +9721,7 @@ export async function renderLocalCodexRolloutDocument() {
         currentRenderedUiState = previousRenderedUiState;
         ensureRenderedUiStatePersistenceInstalled();
         installWorkspaceBar();
+        updateInlineForkTitles();
         return true;
       }
       const searchInput = document.activeElement?.matches("[data-search-query]") ? document.activeElement : null;
@@ -9788,13 +9923,13 @@ export async function renderLocalCodexRolloutDocument() {
     function updateInlineForkTitles() {
       document.querySelectorAll("[data-rollout-fork-source]").forEach(root => {
         const id = root.dataset.rolloutForkSource;
-        root.querySelector("[data-fork-source-label]").textContent = getCustomRolloutTitle({ rolloutId: id }) || id;
+        root.querySelector("[data-fork-source-label]").textContent = getPreferredRolloutTitle({ rolloutId: id }) || id;
       });
       document.querySelectorAll("[data-inline-rollout-id]").forEach(body => {
         const heading = body.querySelector(".rollout-hero h1");
         if (!heading) return;
         heading.dataset.defaultRolloutTitle ??= heading.textContent;
-        heading.textContent = getCustomRolloutTitle({ rolloutId: body.dataset.inlineRolloutId }) || heading.dataset.defaultRolloutTitle;
+        heading.textContent = getPreferredRolloutTitle({ rolloutId: body.dataset.inlineRolloutId }) || heading.dataset.defaultRolloutTitle;
       });
     }
 
@@ -10064,6 +10199,11 @@ export async function renderLocalCodexRolloutDocument() {
     window.addEventListener("storage", handleRolloutTitleStorageChange);
 
     document.addEventListener("click", async event => {
+      const sessionIndexButton = event.target.closest("[data-choose-session-index]");
+      if (sessionIndexButton) {
+        await chooseSessionTitleIndex(sessionIndexButton.dataset.chooseSessionIndex);
+        return;
+      }
       if (event.target.closest("[data-reopen-workspace-tab]")) {
         await reopenClosedWorkspaceTab();
         return;
@@ -10213,7 +10353,17 @@ export async function renderLocalCodexRolloutDocument() {
       }
     });
 
-    document.addEventListener("change", event => {
+    document.addEventListener("change", async event => {
+      if (event.target.matches("[data-session-index-input]")) {
+        const file = event.target.files?.[0];
+        const id = event.target.dataset.sessionIndexInput;
+        event.target.value = "";
+        if (file) {
+          try { await useSessionTitleIndexFile(id, file); }
+          catch (error) { setStatus(`Could not load title index: ${error?.message || error}`, true); }
+        }
+        return;
+      }
       if (event.target.matches("[data-fork-source-file]")) {
         const file = event.target.files?.[0];
         const root = event.target.closest("[data-rollout-fork-source]");
@@ -10309,6 +10459,7 @@ export async function renderLocalCodexRolloutDocument() {
       }
       await initializeWorkspace();
       savedDirectoryEntries = await getSavedDirectoryEntries();
+      await Promise.all(savedDirectoryEntries.map(entry => refreshSessionTitleIndex(entry)));
       await restoreInitialWorkspaceView();
     })();
   </script>

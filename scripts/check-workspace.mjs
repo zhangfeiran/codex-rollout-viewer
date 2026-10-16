@@ -32,7 +32,8 @@ export async function checkWorkspace() {
     getDirectoryEntryById: id => id === "folder-a" ? { id, label: "Sessions A" } : null,
     getDirectoryEntryLabel: entry => entry.label,
     getFolderTabColor: () => "#55aaff",
-    getCustomRolloutTitle: () => "",
+    getPreferredRolloutTitle: () => "",
+    renderSessionTitleIndexControl: () => "",
     updateRenderedRolloutTitle() {},
     CSS: { escape: value => value }
   });

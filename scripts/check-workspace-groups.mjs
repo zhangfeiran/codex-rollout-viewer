@@ -33,7 +33,7 @@ export async function checkWorkspaceGroups() {
     getDirectoryEntryById: id => folders.get(id),
     getDirectoryEntryLabel: entry => entry.label,
     getFolderTabColor: () => "#55aaff",
-    getCustomRolloutTitle: slot => slot.id === "a1" ? "Custom title" : "",
+    getPreferredRolloutTitle: slot => slot.id === "a1" ? "Custom title" : "",
     installWorkspaceBar() { installs += 1; },
     CSS: { escape: value => value },
     URL,

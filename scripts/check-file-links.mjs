@@ -92,6 +92,8 @@ export async function checkFileLinks(realFile) {
   Object.assign(context, {
     activeWorkspaceSlotId: "slot-a", workspaceNavigationVersion: 0,
     currentRenderedSource: null, currentRenderedUiState: null,
+    refreshSessionTitleIndex: async () => {},
+    updateInlineForkTitles() {},
     clearTimeout() {}, persistRenderedUiStateSoon() {},
     captureRenderedUiState: () => ({}), saveCurrentRolloutUiState: async () => {},
     getSourceStateId: source => `${source.directoryId || ""}::${source.path}`,

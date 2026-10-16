@@ -5,6 +5,7 @@ import vm from "node:vm";
 export async function checkRolloutTitles() {
   const html = await readFile(new URL("../codex-rollout-viewer.html", import.meta.url), "utf8");
   const names = ["escapeHtml", "escapeAttribute", "normalizeRolloutUuid", "getSourceRolloutId", "getSourceStateId", "getRolloutTitleStorageKey", "getCustomRolloutTitle", "getRolloutDisplayTitle", "getWorkspaceTabLabel", "updateRenderedRolloutTitle", "refreshRolloutTitleViews", "editRolloutTitle", "handleRolloutTitleStorageChange", "renameWorkspaceSlot", "getSortValue", "compareSortValues", "getSortedIndexItems", "renderRolloutTable"];
+  names.push("getPreferredRolloutTitle");
   const functions = names.map(name => {
     const indent = name.startsWith("escape") ? "" : "    ";
     const match = html.match(new RegExp(`^${indent}(?:async )?function ${name}\\([^]*?\\n${indent}\\}`, "m"));
@@ -29,6 +30,7 @@ export async function checkRolloutTitles() {
   const table = { scrollLeft: 240, outerHTML: "" };
   const context = vm.createContext({
     localStorage,
+    sessionTitleIndexes: new Map(),
     ROLLOUT_TITLE_KEY_PREFIX: "viewer:rollout-title-v1:",
     window: { prompt: () => input, alert: message => alerts.push(message) },
     currentRenderedSource: source,
@@ -111,5 +113,16 @@ export async function checkRolloutTitles() {
   context.editRolloutTitle(source);
   assert.equal(alerts.length, 1, "storage failures must be visible to the user");
   assert.equal(stored.get(titleKey), "Edited in another window", "failed saves retain the previous title");
+  stored.delete(titleKey);
+  context.sessionTitleIndexes.set("folder-a", { titles: new Map([[uuid, { title: "Codex <title>", updatedAt: 1 }]]) });
+  context.refreshRolloutTitleViews();
+  assert.equal(heading.textContent, "Codex <title>");
+  assert.equal(context.document.title, "Codex <title>");
+  assert.equal(context.getRolloutDisplayTitle(item), "Codex <title>");
+  assert.equal(context.getWorkspaceTabLabel({ ...slot, directoryId: "folder-a" }), "Codex <title>");
+  assert.equal(context.getSortValue(item, "title"), "Codex <title>");
+  context.activeWorkspaceViewKind = "index";
+  context.refreshRolloutTitleViews();
+  assert.match(table.outerHTML, /Codex &lt;title&gt;/, "indexed Codex titles remain escaped in list rendering");
   console.log("Checked rollout title persistence, tab and header updates, reset, isolation, sorting, escaping, and cross-window changes.");
 }
